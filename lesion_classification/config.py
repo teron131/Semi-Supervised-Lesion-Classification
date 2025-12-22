@@ -51,15 +51,15 @@ class Settings(BaseSettings):
     CONSISTENCY_MAX_WEIGHT: float = 5.0
     CONSISTENCY_RAMPUP_EPOCHS: int = 5
     TEACHER_TEMPERATURE: float = 1.0
-    FIXMATCH_TAU: float = 0.95
+    FIXMATCH_TAU: float = 0.9
     FIXMATCH_LAMBDA_U: float = 1.0
     FIXMATCH_RAMPUP_EPOCHS: int = 5
     FIXMATCH_MIN_TAU: float = 0.5
     FIXMATCH_USE_CLASS_THRESHOLDS: bool = True
     FIXMATCH_DISTRIBUTION_ALIGNMENT: bool = True
     FIXMATCH_DA_MOMENTUM: float = 0.9
-    FIXMATCH_SHARPEN_T: float = 0.5
-    FLEXMATCH_ENABLE: bool = True
+    FIXMATCH_SHARPEN_T: float = 1.0
+    FLEXMATCH_ENABLE: bool = False
     FLEXMATCH_MOMENTUM: float = 0.9
 
     # Training control
