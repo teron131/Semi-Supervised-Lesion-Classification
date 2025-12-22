@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     FIXMATCH_RAMPUP_EPOCHS: int = 5
     FIXMATCH_MIN_TAU: float = 0.5
     FIXMATCH_USE_CLASS_THRESHOLDS: bool = True
+    FIXMATCH_DISTRIBUTION_ALIGNMENT: bool = True
+    FIXMATCH_DA_MOMENTUM: float = 0.9
+    FIXMATCH_SHARPEN_T: float = 0.5
 
     # Training control
     EARLY_STOP_PATIENCE: int = 5

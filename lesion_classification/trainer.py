@@ -113,6 +113,7 @@ def train_one_epoch_fixmatch(
     num_batches = 0
     labeled_preds_list = []
     labeled_labels_list = []
+    ema_pos = None
 
     def rampup_weight(current_epoch: int) -> float:
         if settings.FIXMATCH_RAMPUP_EPOCHS <= 0:
@@ -142,6 +143,24 @@ def train_one_epoch_fixmatch(
         with torch.no_grad():
             weak_logits = model(weak_imgs)
             weak_probs = torch.sigmoid(weak_logits)
+
+            if settings.FIXMATCH_DISTRIBUTION_ALIGNMENT and settings.TRAIN_POS_RATIO is not None:
+                batch_pos = weak_probs.mean().clamp(1e-6, 1 - 1e-6)
+                if ema_pos is None:
+                    ema_pos = batch_pos
+                else:
+                    ema_pos = settings.FIXMATCH_DA_MOMENTUM * ema_pos + (1 - settings.FIXMATCH_DA_MOMENTUM) * batch_pos
+                target_pos = torch.tensor(settings.TRAIN_POS_RATIO, device=weak_probs.device)
+                scale_pos = target_pos / ema_pos
+                scale_neg = (1 - target_pos) / (1 - ema_pos)
+                adjusted = weak_probs * scale_pos
+                weak_probs = adjusted / (adjusted + (1 - weak_probs) * scale_neg)
+
+            if settings.FIXMATCH_SHARPEN_T != 1.0:
+                t = settings.FIXMATCH_SHARPEN_T
+                sharpened = weak_probs.pow(1.0 / t)
+                weak_probs = sharpened / (sharpened + (1 - weak_probs).pow(1.0 / t))
+
             confidence = torch.maximum(weak_probs, 1 - weak_probs)
             pseudo_labels = (weak_probs >= 0.5).float()
             if settings.FIXMATCH_USE_CLASS_THRESHOLDS and settings.TRAIN_POS_RATIO is not None and settings.TRAIN_NEG_RATIO is not None:
