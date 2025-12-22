@@ -147,7 +147,7 @@ def train_one_epoch_fixmatch(
         strong_imgs = strong_imgs.to(device)
 
         optimizer.zero_grad()
-        with torch.cuda.amp.autocast(enabled=settings.USE_AMP and device.type == "cuda"):
+        with torch.amp.autocast(device_type="cuda" if device.type == "cuda" else "cpu", enabled=settings.USE_AMP):
             labeled_logits = model(labeled_imgs)
             supervised_loss = supervised_criterion(labeled_logits, labeled_targets)
             labeled_probs = torch.sigmoid(labeled_logits)
@@ -289,7 +289,7 @@ def run_training(
     """Main training loop."""
     device = torch.device(device)
     model.to(device)
-    scaler = torch.cuda.amp.GradScaler(enabled=settings.USE_AMP and device.type == "cuda")
+    scaler = torch.amp.GradScaler("cuda", enabled=settings.USE_AMP and device.type == "cuda")
 
     history = {
         "loss_total": [],
