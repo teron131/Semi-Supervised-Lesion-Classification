@@ -4,7 +4,7 @@ from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from .config import settings
-from .data import get_dataloaders, prepare_data
+from .data import get_class_counts, get_dataloaders, prepare_data
 from .losses import BCEFocalLoss
 from .models import MeanTeacherModel, ResnetModel, get_resnet50
 from .trainer import run_training
@@ -17,6 +17,12 @@ def main():
 
     # 2. Data Preparation (if needed)
     prepare_data(settings.DATA_DIR)
+
+    benign_count, malignant_count = get_class_counts(settings.TRAIN_DIR)
+    total_count = benign_count + malignant_count
+    if total_count > 0:
+        settings.TRAIN_NEG_RATIO = benign_count / total_count
+        settings.TRAIN_POS_RATIO = malignant_count / total_count
 
     # 3. Data Loaders
     train_loader, unlabeled_loader, val_loader = get_dataloaders(settings.BATCH_SIZE)
@@ -37,7 +43,10 @@ def main():
     # 5. Optimizer, Loss, Scheduler
     optimizer = Adam(model.parameters(), lr=settings.LEARNING_RATE, weight_decay=settings.WEIGHT_DECAY)
     if settings.SUPERVISED_LOSS == "bce":
-        pos_weight = torch.tensor([settings.POS_WEIGHT], dtype=torch.float32, device=settings.DEVICE)
+        pos_weight_value = settings.POS_WEIGHT
+        if settings.AUTO_POS_WEIGHT and benign_count > 0 and malignant_count > 0:
+            pos_weight_value = benign_count / malignant_count
+        pos_weight = torch.tensor([pos_weight_value], dtype=torch.float32, device=settings.DEVICE)
         supervised_criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     else:
         supervised_criterion = BCEFocalLoss(gamma=settings.FOCAL_GAMMA, alpha=settings.FOCAL_ALPHA)

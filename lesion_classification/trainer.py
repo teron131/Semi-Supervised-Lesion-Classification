@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 
 from .config import settings
 
+
 def train_one_epoch_mean_teacher(
     model: nn.Module,
     labeled_loader: DataLoader,
@@ -112,6 +113,13 @@ def train_one_epoch_fixmatch(
     labeled_preds_list = []
     labeled_labels_list = []
 
+    def rampup_weight(current_epoch: int) -> float:
+        if settings.FIXMATCH_RAMPUP_EPOCHS <= 0:
+            return 1.0
+        epoch = min(float(current_epoch), float(settings.FIXMATCH_RAMPUP_EPOCHS))
+        phase = 1.0 - epoch / float(settings.FIXMATCH_RAMPUP_EPOCHS)
+        return float(np.exp(-5.0 * phase * phase))
+
     labeled_iter = itertools.cycle(labeled_loader)
     for weak_imgs, strong_imgs in unlabeled_loader:
         labeled_imgs, labeled_targets = next(labeled_iter)
@@ -135,13 +143,21 @@ def train_one_epoch_fixmatch(
             weak_probs = torch.sigmoid(weak_logits)
             confidence = torch.maximum(weak_probs, 1 - weak_probs)
             pseudo_labels = (weak_probs >= 0.5).float()
-            mask = (confidence >= settings.FIXMATCH_TAU).float()
+            if settings.FIXMATCH_USE_CLASS_THRESHOLDS and settings.TRAIN_POS_RATIO is not None and settings.TRAIN_NEG_RATIO is not None:
+                max_ratio = max(settings.TRAIN_POS_RATIO, settings.TRAIN_NEG_RATIO)
+                tau_pos = max(settings.FIXMATCH_MIN_TAU, settings.FIXMATCH_TAU * (settings.TRAIN_POS_RATIO / max_ratio))
+                tau_neg = max(settings.FIXMATCH_MIN_TAU, settings.FIXMATCH_TAU * (settings.TRAIN_NEG_RATIO / max_ratio))
+                thresholds = torch.where(pseudo_labels > 0.5, torch.tensor(tau_pos, device=confidence.device), torch.tensor(tau_neg, device=confidence.device))
+                mask = (confidence >= thresholds).float()
+            else:
+                mask = (confidence >= settings.FIXMATCH_TAU).float()
 
         strong_logits = model(strong_imgs)
         unsup_loss = F.binary_cross_entropy_with_logits(strong_logits, pseudo_labels, reduction="none")
         unsup_loss = (unsup_loss * mask).sum() / (mask.sum() + 1e-8)
 
-        total_loss = supervised_loss + settings.FIXMATCH_LAMBDA_U * unsup_loss
+        lambda_u = settings.FIXMATCH_LAMBDA_U * rampup_weight(epoch)
+        total_loss = supervised_loss + lambda_u * unsup_loss
         total_loss.backward()
         optimizer.step()
 
@@ -228,9 +244,7 @@ def run_training(
 
     for epoch in range(epochs):
         if settings.SSL_METHOD == "fixmatch":
-            avg_loss, sup_loss, con_loss, train_acc, train_auc = train_one_epoch_fixmatch(
-                model, train_loader, unlabeled_loader, optimizer, supervised_criterion, device, epoch
-            )
+            avg_loss, sup_loss, con_loss, train_acc, train_auc = train_one_epoch_fixmatch(model, train_loader, unlabeled_loader, optimizer, supervised_criterion, device, epoch)
         else:
             avg_loss, sup_loss, con_loss, train_acc, train_auc = train_one_epoch_mean_teacher(
                 model, train_loader, unlabeled_loader, optimizer, supervised_criterion, consistency_criterion, device, epoch

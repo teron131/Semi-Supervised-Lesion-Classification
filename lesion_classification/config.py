@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     FOCAL_ALPHA: float = 0.6
     SUPERVISED_LOSS: str = "bce"  # "focal" or "bce"
     POS_WEIGHT: float = 3.0
+    AUTO_POS_WEIGHT: bool = True
 
     # Data settings
     TRAIN_SPLIT_SIZE: int = 270
@@ -41,6 +42,7 @@ class Settings(BaseSettings):
     IMAGE_SIZE: int = 224
     NUM_WORKERS: int = 2
     PIN_MEMORY: bool = torch.cuda.is_available()
+    USE_WEIGHTED_SAMPLER: bool = True
 
     # Semi-supervised settings
     SSL_METHOD: str = "fixmatch"  # "mean_teacher" or "fixmatch"
@@ -49,9 +51,16 @@ class Settings(BaseSettings):
     TEACHER_TEMPERATURE: float = 1.0
     FIXMATCH_TAU: float = 0.95
     FIXMATCH_LAMBDA_U: float = 1.0
+    FIXMATCH_RAMPUP_EPOCHS: int = 5
+    FIXMATCH_MIN_TAU: float = 0.5
+    FIXMATCH_USE_CLASS_THRESHOLDS: bool = True
 
     # Training control
     EARLY_STOP_PATIENCE: int = 5
+
+    # Derived stats (populated at runtime)
+    TRAIN_POS_RATIO: float | None = None
+    TRAIN_NEG_RATIO: float | None = None
 
 
 settings = Settings()

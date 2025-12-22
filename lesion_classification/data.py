@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import ConcatDataset, DataLoader, Dataset
+from torch.utils.data import ConcatDataset, DataLoader, Dataset, WeightedRandomSampler
 
 from .config import ensure_dirs, settings
 
@@ -85,6 +85,12 @@ def prepare_data(data_root: Path):
             shutil.copy2(src_path, settings.VAL_DIR / label / f"{name}.jpg")
 
     print(f"Data split completed: {len(ix_train)} train, {len(ix_unlabeled)} unlabeled, {len(ix_val)} val.")
+
+
+def get_class_counts(train_dir: Path) -> tuple[int, int]:
+    benign = len(list((train_dir / "benign").glob("*.jpg")))
+    malignant = len(list((train_dir / "malignant").glob("*.jpg")))
+    return benign, malignant
 
 
 class AugmentedDataset(Dataset):
@@ -238,7 +244,9 @@ def get_dataloaders(batch_size: int = 32):
     malignant_filepaths = sorted(malignant_dir.glob("*.jpg"))
 
     # Upsampling (Malignant x2 as in notebook)
-    aug_train_filepaths = [*benign_filepaths, *malignant_filepaths, *malignant_filepaths]
+    aug_train_filepaths = [*benign_filepaths, *malignant_filepaths]
+    if not settings.USE_WEIGHTED_SAMPLER:
+        aug_train_filepaths = [*aug_train_filepaths, *malignant_filepaths]
     random.seed(settings.SPLIT_SEED)
     random.shuffle(aug_train_filepaths)
 
@@ -260,10 +268,23 @@ def get_dataloaders(batch_size: int = 32):
     val_dataset = AugmentedDataset(val_filepaths, transform=normalization)
 
     generator = torch.Generator().manual_seed(settings.SPLIT_SEED)
+    sampler = None
+    if settings.USE_WEIGHTED_SAMPLER:
+        label_weights = []
+        benign_weight = 1.0 / max(len(benign_filepaths), 1)
+        malignant_weight = 1.0 / max(len(malignant_filepaths), 1)
+        for dataset in train_dataset.datasets:
+            if isinstance(dataset, AugmentedDataset):
+                for filepath in dataset.images_filepaths:
+                    parent_dir = Path(filepath).parent.name
+                    label_weights.append(malignant_weight if parent_dir == "malignant" else benign_weight)
+        sampler = WeightedRandomSampler(label_weights, num_samples=len(label_weights), replacement=True)
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=(sampler is None),
+        sampler=sampler,
         num_workers=settings.NUM_WORKERS,
         pin_memory=settings.PIN_MEMORY,
         generator=generator,
