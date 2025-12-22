@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     FLEXMATCH_ENABLE: bool = True
     FLEXMATCH_MOMENTUM: float = 0.7
     SOFT_PSEUDO_LABELS: bool = True
+    FLEXMATCH_WARMUP_EPOCHS: int = 5
+    FLEXMATCH_TAU_MIN: float = 0.85
 
     # Training control
     EARLY_STOP_PATIENCE: int = 5

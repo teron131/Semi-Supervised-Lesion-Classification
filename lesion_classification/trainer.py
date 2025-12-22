@@ -94,8 +94,8 @@ def _flexmatch_thresholds(
     ema_select = settings.FLEXMATCH_MOMENTUM * ema_select + (1 - settings.FLEXMATCH_MOMENTUM) * torch.stack([(select_mask * batch_neg).mean(), (select_mask * batch_pos).mean()])
     class_ratio = ema_select / ema_total
     max_ratio = class_ratio.max().clamp(min=1e-6)
-    tau_neg = max(settings.FIXMATCH_MIN_TAU, float(settings.FIXMATCH_TAU * (class_ratio[0] / max_ratio)))
-    tau_pos = max(settings.FIXMATCH_MIN_TAU, float(settings.FIXMATCH_TAU * (class_ratio[1] / max_ratio)))
+    tau_neg = max(settings.FLEXMATCH_TAU_MIN, float(settings.FIXMATCH_TAU * (class_ratio[0] / max_ratio)))
+    tau_pos = max(settings.FLEXMATCH_TAU_MIN, float(settings.FIXMATCH_TAU * (class_ratio[1] / max_ratio)))
     thresholds = torch.where(
         pseudo_labels > 0.5,
         torch.tensor(tau_pos, device=confidence.device),
@@ -114,7 +114,7 @@ def train_one_epoch_fixmatch(
     epoch: int,
     scaler: torch.amp.GradScaler | None = None,
     ema: EMA | None = None,
-) -> tuple[float, float, float, float, float]:
+) -> tuple[float, float, float, float, float, float, float, float]:
     """Train using FixMatch-style pseudo-labeling."""
     model.train()
     total_loss_accum = 0.0
@@ -129,6 +129,9 @@ def train_one_epoch_fixmatch(
         ema_total = torch.tensor([1e-6, 1e-6], device=device)
 
     labeled_iter = itertools.cycle(labeled_loader)
+    accepted_pos = 0.0
+    accepted_neg = 0.0
+    accepted_total = 0.0
     for weak_imgs, strong_imgs in unlabeled_loader:
         labeled_imgs, labeled_targets = next(labeled_iter)
         num_batches += 1
@@ -162,7 +165,8 @@ def train_one_epoch_fixmatch(
 
             confidence = torch.maximum(weak_probs, 1 - weak_probs)
             pseudo_labels = (weak_probs >= 0.5).float()
-            if settings.FLEXMATCH_ENABLE:
+            use_flexmatch = settings.FLEXMATCH_ENABLE and epoch >= settings.FLEXMATCH_WARMUP_EPOCHS
+            if use_flexmatch:
                 thresholds, ema_select, ema_total = _flexmatch_thresholds(confidence, pseudo_labels, ema_select, ema_total)
             elif settings.FIXMATCH_USE_CLASS_THRESHOLDS and settings.TRAIN_POS_RATIO is not None and settings.TRAIN_NEG_RATIO is not None:
                 thresholds = _class_ratio_thresholds(
@@ -177,13 +181,16 @@ def train_one_epoch_fixmatch(
 
             strong_logits = model(strong_imgs)
             unsup_loss = F.binary_cross_entropy_with_logits(strong_logits, pseudo_labels, reduction="none")
+            mask = (confidence >= thresholds).float()
             if settings.SOFT_PSEUDO_LABELS:
                 denom = (1 - thresholds).clamp_min(1e-6)
                 weights = ((confidence - thresholds) / denom).clamp(0, 1)
                 unsup_loss = (unsup_loss * weights).sum() / (weights.sum() + 1e-8)
             else:
-                mask = (confidence >= thresholds).float()
                 unsup_loss = (unsup_loss * mask).sum() / (mask.sum() + 1e-8)
+            accepted_total += float(mask.sum().item())
+            accepted_pos += float((mask * pseudo_labels).sum().item())
+            accepted_neg += float((mask * (1 - pseudo_labels)).sum().item())
 
             lambda_u = settings.FIXMATCH_LAMBDA_U * _rampup_weight(epoch, settings.FIXMATCH_RAMPUP_EPOCHS)
             total_loss = supervised_loss + lambda_u * unsup_loss
@@ -216,7 +223,7 @@ def train_one_epoch_fixmatch(
     labeled_preds = np.array(labeled_preds_list)
     acc = accuracy_score(labeled_labels, np.round(labeled_preds))
     auc = roc_auc_score(labeled_labels, labeled_preds) if len(np.unique(labeled_labels)) > 1 else 0.0
-    return avg_loss, avg_sup_loss, avg_unsup_loss, acc, auc
+    return avg_loss, avg_sup_loss, avg_unsup_loss, acc, auc, accepted_total, accepted_pos, accepted_neg
 
 
 @torch.no_grad()
@@ -290,7 +297,7 @@ def run_training(
     patience_left = settings.EARLY_STOP_PATIENCE
 
     for epoch in range(epochs):
-        avg_loss, sup_loss, unsup_loss, train_acc, train_auc = train_one_epoch_fixmatch(
+        avg_loss, sup_loss, unsup_loss, train_acc, train_auc, accepted_total, accepted_pos, accepted_neg = train_one_epoch_fixmatch(
             model, train_loader, unlabeled_loader, optimizer, supervised_criterion, device, epoch, scaler, ema
         )
 
@@ -307,10 +314,11 @@ def run_training(
         history["val_auc"].append(val_auc)
         history["val_ap"].append(val_ap)
 
+        accepted_ratio = accepted_pos / accepted_total if accepted_total > 0 else 0.0
         print(
             f"Epoch [{epoch + 1:02}/{epochs}] - Loss: {avg_loss:.4f} - Train Acc: {train_acc * 100:.2f}% "
             f"- Val Acc: {val_acc * 100:.2f}% - Val AUC: {val_auc:.4f} - Val AP: {val_ap:.4f} "
-            f"- Val Pos%: {val_pos_rate * 100:.1f}%"
+            f"- Val Pos%: {val_pos_rate * 100:.1f}% - Accepted Pos%: {accepted_ratio * 100:.1f}%"
         )
 
         metric_value = val_auc if settings.BEST_METRIC == "val_auc" else val_ap
