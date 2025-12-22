@@ -44,16 +44,16 @@ class Settings(BaseSettings):
     USE_WEIGHTED_SAMPLER: bool = False
 
     # Semi-supervised settings (FixMatch)
-    FIXMATCH_TAU: float = 0.9
-    FIXMATCH_LAMBDA_U: float = 1.0
-    FIXMATCH_RAMPUP_EPOCHS: int = 5
-    FIXMATCH_MIN_TAU: float = 0.5
+    FIXMATCH_TAU: float = 0.85
+    FIXMATCH_LAMBDA_U: float = 0.5
+    FIXMATCH_RAMPUP_EPOCHS: int = 10
+    FIXMATCH_MIN_TAU: float = 0.4
     FIXMATCH_USE_CLASS_THRESHOLDS: bool = True
     FIXMATCH_DISTRIBUTION_ALIGNMENT: bool = True
     FIXMATCH_DA_MOMENTUM: float = 0.9
     FIXMATCH_SHARPEN_T: float = 1.0
-    FLEXMATCH_ENABLE: bool = False
-    FLEXMATCH_MOMENTUM: float = 0.9
+    FLEXMATCH_ENABLE: bool = True
+    FLEXMATCH_MOMENTUM: float = 0.7
 
     # Training control
     EARLY_STOP_PATIENCE: int = 5
