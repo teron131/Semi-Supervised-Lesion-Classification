@@ -261,10 +261,7 @@ def get_dataloaders(batch_size: int = 32):
     standard_train_dataset = AugmentedDataset(standard_train_filepaths, transform=normalization)
     train_dataset = ConcatDataset([standard_train_dataset, aug_train_dataset])
 
-    if settings.SSL_METHOD == "fixmatch":
-        unlabeled_dataset = UnlabeledDataset(settings.UNLABELED_DIR, weak_transform=weak_t, strong_transform=strong_t)
-    else:
-        unlabeled_dataset = UnlabeledDataset(settings.UNLABELED_DIR, transform=normalization)
+    unlabeled_dataset = UnlabeledDataset(settings.UNLABELED_DIR, weak_transform=weak_t, strong_transform=strong_t)
     val_filepaths = sorted((settings.VAL_DIR / "benign").glob("*.jpg")) + sorted((settings.VAL_DIR / "malignant").glob("*.jpg"))
     val_dataset = AugmentedDataset(val_filepaths, transform=normalization)
 

@@ -24,9 +24,8 @@ class Settings(BaseSettings):
     # Model Settings
     DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
     PRE_TRAINED: bool = True
-    DROPOUT: float = 0.5
     NUM_CLASSES: int = 1
-    BACKBONE: str = "convnext_tiny"  # "resnet50" or "convnext_tiny"
+    BACKBONE: str = "convnext_tiny"
 
     # Loss Settings
     FOCAL_GAMMA: float = 2.0
@@ -46,11 +45,7 @@ class Settings(BaseSettings):
     PIN_MEMORY: bool = torch.cuda.is_available()
     USE_WEIGHTED_SAMPLER: bool = False
 
-    # Semi-supervised settings
-    SSL_METHOD: str = "fixmatch"  # "mean_teacher" or "fixmatch"
-    CONSISTENCY_MAX_WEIGHT: float = 5.0
-    CONSISTENCY_RAMPUP_EPOCHS: int = 5
-    TEACHER_TEMPERATURE: float = 1.0
+    # Semi-supervised settings (FixMatch)
     FIXMATCH_TAU: float = 0.9
     FIXMATCH_LAMBDA_U: float = 1.0
     FIXMATCH_RAMPUP_EPOCHS: int = 5

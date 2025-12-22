@@ -14,98 +14,6 @@ from torch.utils.data import DataLoader
 from .config import settings
 
 
-def train_one_epoch_mean_teacher(
-    model: nn.Module,
-    labeled_loader: DataLoader,
-    unlabeled_loader: DataLoader,
-    optimizer: Optimizer,
-    supervised_criterion: nn.Module,
-    consistency_criterion: nn.Module,
-    device: torch.device,
-    epoch: int,
-    scaler: torch.cuda.amp.GradScaler | None = None,
-) -> tuple[float, float, float, float, float]:
-    """Train the Mean Teacher model for one epoch."""
-    model.student_model.train()
-    model.teacher_model.eval()
-
-    total_loss_accum = 0.0
-    sup_loss_accum = 0.0
-    con_loss_accum = 0.0
-    num_batches = 0
-
-    unlabeled_labels_list = []
-    unlabeled_preds_list = []
-
-    unlabeled_iter = iter(unlabeled_loader)
-    labeled_iter = itertools.cycle(labeled_loader)
-
-    for _ in range(len(unlabeled_loader)):
-        labeled_imgs, labeled_targets = next(labeled_iter)
-        unlabeled_imgs, _ = next(unlabeled_iter)
-        num_batches += 1
-        labeled_imgs = labeled_imgs.to(device)
-        labeled_targets = labeled_targets.float().unsqueeze(1).to(device)
-        unlabeled_imgs = unlabeled_imgs.to(device)
-
-        optimizer.zero_grad()
-        with torch.cuda.amp.autocast(enabled=settings.USE_AMP and device.type == "cuda"):
-            # 1. Supervised Loss (Student on Labeled Data)
-            labeled_preds = model.student_model(labeled_imgs)
-            supervised_loss = supervised_criterion(labeled_preds, labeled_targets)
-
-            # 2. Consistency Loss (Student vs Teacher on Unlabeled Data)
-            unlabeled_preds_student = model.student_model(unlabeled_imgs)
-            with torch.no_grad():
-                unlabeled_preds_teacher = model.teacher_model(unlabeled_imgs)
-
-            consistency_weight = model.get_consistency_weight(epoch)
-            teacher_logits = unlabeled_preds_teacher / settings.TEACHER_TEMPERATURE
-            consistency_loss = consistency_weight * consistency_criterion(unlabeled_preds_student, teacher_logits)
-
-            # 3. Total Loss
-            total_loss = supervised_loss + consistency_loss
-
-        if scaler is not None:
-            scaler.scale(total_loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.student_model.parameters(), settings.MAX_GRAD_NORM)
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            total_loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.student_model.parameters(), settings.MAX_GRAD_NORM)
-            optimizer.step()
-
-        # 4. Update Teacher Parameters (EMA)
-        model.update_teacher_model(current_epoch=epoch)
-
-        # Accumulate metrics
-        total_loss_accum += total_loss.item()
-        sup_loss_accum += supervised_loss.item()
-        con_loss_accum += consistency_loss.item()
-
-        unlabeled_probs_student = torch.sigmoid(unlabeled_preds_student)
-        unlabeled_probs_teacher = torch.sigmoid(unlabeled_preds_teacher)
-        unlabeled_preds_list.extend(unlabeled_probs_student.detach().cpu().numpy())
-        unlabeled_labels_list.extend(np.around(unlabeled_probs_teacher.detach().cpu().numpy()))
-
-    # Calculate metrics for unlabeled data (pseudo-accuracy/AUC)
-    unlabeled_labels = np.array(unlabeled_labels_list)
-    unlabeled_preds = np.array(unlabeled_preds_list)
-
-    acc = accuracy_score(unlabeled_labels, np.round(unlabeled_preds))
-    auc = roc_auc_score(unlabeled_labels, unlabeled_preds) if len(np.unique(unlabeled_labels)) > 1 else 0.0
-
-    if num_batches == 0:
-        raise RuntimeError("No batches processed; check your data loaders.")
-
-    avg_loss = total_loss_accum / num_batches
-    avg_sup_loss = sup_loss_accum / num_batches
-    avg_con_loss = con_loss_accum / num_batches
-    return avg_loss, avg_sup_loss, avg_con_loss, acc, auc
-
-
 def train_one_epoch_fixmatch(
     model: nn.Module,
     labeled_loader: DataLoader,
@@ -282,7 +190,6 @@ def run_training(
     optimizer: Optimizer,
     scheduler: _LRScheduler,
     supervised_criterion: nn.Module,
-    consistency_criterion: nn.Module,
     device: str,
     epochs: int,
 ):
@@ -307,14 +214,7 @@ def run_training(
     patience_left = settings.EARLY_STOP_PATIENCE
 
     for epoch in range(epochs):
-        if settings.SSL_METHOD == "fixmatch":
-            avg_loss, sup_loss, con_loss, train_acc, train_auc = train_one_epoch_fixmatch(
-                model, train_loader, unlabeled_loader, optimizer, supervised_criterion, device, epoch, scaler
-            )
-        else:
-            avg_loss, sup_loss, con_loss, train_acc, train_auc = train_one_epoch_mean_teacher(
-                model, train_loader, unlabeled_loader, optimizer, supervised_criterion, consistency_criterion, device, epoch, scaler
-            )
+        avg_loss, sup_loss, con_loss, train_acc, train_auc = train_one_epoch_fixmatch(model, train_loader, unlabeled_loader, optimizer, supervised_criterion, device, epoch, scaler)
 
         val_acc, val_auc, val_ap, val_pos_rate = validate(model, val_loader, device)
         scheduler.step()

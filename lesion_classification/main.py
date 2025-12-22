@@ -8,7 +8,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from .config import settings
 from .data import get_class_counts, get_dataloaders, prepare_data
 from .losses import BCEFocalLoss
-from .models import ClassifierModel, MeanTeacherModel, get_convnext_tiny, get_resnet50
+from .models import ClassifierModel, get_convnext_tiny
 from .trainer import run_training
 from .utils import plot_history, save_history, set_seed
 
@@ -36,21 +36,8 @@ def main():
     train_loader, unlabeled_loader, val_loader = get_dataloaders(settings.BATCH_SIZE)
 
     # 4. Model
-    if settings.BACKBONE == "convnext_tiny":
-        backbone, feature_dim = get_convnext_tiny(pre_trained=settings.PRE_TRAINED)
-    else:
-        backbone = get_resnet50(pre_trained=settings.PRE_TRAINED, dropout=settings.DROPOUT)
-        feature_dim = 2048
-    base_model = ClassifierModel(backbone, feature_dim, settings.NUM_CLASSES)
-    if settings.SSL_METHOD == "fixmatch":
-        model = base_model
-    else:
-        model = MeanTeacherModel(
-            base_model,
-            ema_decay=settings.EMA_DECAY,
-            consistency_max_weight=settings.CONSISTENCY_MAX_WEIGHT,
-            rampup_epochs=settings.CONSISTENCY_RAMPUP_EPOCHS,
-        )
+    backbone, feature_dim = get_convnext_tiny(pre_trained=settings.PRE_TRAINED)
+    model = ClassifierModel(backbone, feature_dim, settings.NUM_CLASSES)
 
     # 5. Optimizer, Loss, Scheduler
     optimizer = AdamW(model.parameters(), lr=settings.LEARNING_RATE, weight_decay=settings.WEIGHT_DECAY)
@@ -63,8 +50,6 @@ def main():
         supervised_criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     else:
         supervised_criterion = BCEFocalLoss(gamma=settings.FOCAL_GAMMA, alpha=settings.FOCAL_ALPHA)
-    consistency_criterion = nn.MSELoss()
-
     def lr_lambda(epoch: int) -> float:
         if epoch < settings.WARMUP_EPOCHS:
             return float(epoch + 1) / float(max(1, settings.WARMUP_EPOCHS))
@@ -82,7 +67,6 @@ def main():
         optimizer=optimizer,
         scheduler=scheduler,
         supervised_criterion=supervised_criterion,
-        consistency_criterion=consistency_criterion,
         device=settings.DEVICE,
         epochs=settings.EPOCHS,
     )
