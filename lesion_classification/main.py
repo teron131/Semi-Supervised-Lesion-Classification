@@ -23,6 +23,12 @@ def main():
     if total_count > 0:
         settings.TRAIN_NEG_RATIO = benign_count / total_count
         settings.TRAIN_POS_RATIO = malignant_count / total_count
+        print(f"Train split: benign={benign_count} malignant={malignant_count}")
+
+    val_benign, val_malignant = get_class_counts(settings.VAL_DIR)
+    val_total = val_benign + val_malignant
+    if val_total > 0:
+        print(f"Val split: benign={val_benign} malignant={val_malignant}")
 
     # 3. Data Loaders
     train_loader, unlabeled_loader, val_loader = get_dataloaders(settings.BATCH_SIZE)
@@ -46,6 +52,7 @@ def main():
         pos_weight_value = settings.POS_WEIGHT
         if settings.AUTO_POS_WEIGHT and benign_count > 0 and malignant_count > 0:
             pos_weight_value = benign_count / malignant_count
+            pos_weight_value = min(pos_weight_value, settings.POS_WEIGHT_MAX)
         pos_weight = torch.tensor([pos_weight_value], dtype=torch.float32, device=settings.DEVICE)
         supervised_criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     else:

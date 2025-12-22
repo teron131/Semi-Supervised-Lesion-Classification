@@ -180,7 +180,7 @@ def train_one_epoch_fixmatch(
 
 
 @torch.no_grad()
-def validate(model: nn.Module, val_loader: DataLoader, device: torch.device) -> tuple[float, float, float]:
+def validate(model: nn.Module, val_loader: DataLoader, device: torch.device) -> tuple[float, float, float, float]:
     """Validate the student model."""
     if hasattr(model, "student_model"):
         model.student_model.eval()
@@ -207,8 +207,9 @@ def validate(model: nn.Module, val_loader: DataLoader, device: torch.device) -> 
     acc = accuracy_score(val_labels, np.round(val_preds))
     auc = roc_auc_score(val_labels, val_preds) if len(np.unique(val_labels)) > 1 else 0.0
     ap = average_precision_score(val_labels, val_preds) if len(np.unique(val_labels)) > 1 else 0.0
+    pos_rate = float(np.mean(np.round(val_preds))) if len(val_preds) > 0 else 0.0
 
-    return acc, auc, ap
+    return acc, auc, ap, pos_rate
 
 
 def run_training(
@@ -250,7 +251,7 @@ def run_training(
                 model, train_loader, unlabeled_loader, optimizer, supervised_criterion, consistency_criterion, device, epoch
             )
 
-        val_acc, val_auc, val_ap = validate(model, val_loader, device)
+        val_acc, val_auc, val_ap, val_pos_rate = validate(model, val_loader, device)
         scheduler.step()
 
         # Update history
@@ -265,7 +266,8 @@ def run_training(
 
         print(
             f"Epoch [{epoch + 1:02}/{epochs}] - Loss: {avg_loss:.4f} - Train Acc: {train_acc * 100:.2f}% "
-            f"- Val Acc: {val_acc * 100:.2f}% - Val AUC: {val_auc:.4f} - Val AP: {val_ap:.4f}"
+            f"- Val Acc: {val_acc * 100:.2f}% - Val AUC: {val_auc:.4f} - Val AP: {val_ap:.4f} "
+            f"- Val Pos%: {val_pos_rate * 100:.1f}%"
         )
 
         if val_auc > best_val_auc:

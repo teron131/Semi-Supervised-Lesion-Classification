@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     SUPERVISED_LOSS: str = "bce"  # "focal" or "bce"
     POS_WEIGHT: float = 3.0
     AUTO_POS_WEIGHT: bool = True
+    POS_WEIGHT_MAX: float = 3.0
 
     # Data settings
     TRAIN_SPLIT_SIZE: int = 270
@@ -42,7 +43,7 @@ class Settings(BaseSettings):
     IMAGE_SIZE: int = 224
     NUM_WORKERS: int = 2
     PIN_MEMORY: bool = torch.cuda.is_available()
-    USE_WEIGHTED_SAMPLER: bool = True
+    USE_WEIGHTED_SAMPLER: bool = False
 
     # Semi-supervised settings
     SSL_METHOD: str = "fixmatch"  # "mean_teacher" or "fixmatch"
