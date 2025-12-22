@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     FIXMATCH_DISTRIBUTION_ALIGNMENT: bool = True
     FIXMATCH_DA_MOMENTUM: float = 0.9
     FIXMATCH_SHARPEN_T: float = 0.5
+    FLEXMATCH_ENABLE: bool = True
+    FLEXMATCH_MOMENTUM: float = 0.9
 
     # Training control
     EARLY_STOP_PATIENCE: int = 5
@@ -66,6 +68,9 @@ class Settings(BaseSettings):
     BEST_METRIC: str = "val_auc"  # "val_auc" or "val_ap"
     CHECKPOINT_DIR: Path = PROJECT_ROOT / "checkpoints"
     RESULTS_DIR: Path = PROJECT_ROOT / "results"
+    WARMUP_EPOCHS: int = 2
+    USE_AMP: bool = True
+    MAX_GRAD_NORM: float = 1.0
 
     # Derived stats (populated at runtime)
     TRAIN_POS_RATIO: float | None = None

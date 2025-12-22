@@ -23,6 +23,7 @@ def train_one_epoch_mean_teacher(
     consistency_criterion: nn.Module,
     device: torch.device,
     epoch: int,
+    scaler: torch.cuda.amp.GradScaler | None = None,
 ) -> tuple[float, float, float, float, float]:
     """Train the Mean Teacher model for one epoch."""
     model.student_model.train()
@@ -48,24 +49,33 @@ def train_one_epoch_mean_teacher(
         unlabeled_imgs = unlabeled_imgs.to(device)
 
         optimizer.zero_grad()
+        with torch.cuda.amp.autocast(enabled=settings.USE_AMP and device.type == "cuda"):
+            # 1. Supervised Loss (Student on Labeled Data)
+            labeled_preds = model.student_model(labeled_imgs)
+            supervised_loss = supervised_criterion(labeled_preds, labeled_targets)
 
-        # 1. Supervised Loss (Student on Labeled Data)
-        labeled_preds = model.student_model(labeled_imgs)
-        supervised_loss = supervised_criterion(labeled_preds, labeled_targets)
+            # 2. Consistency Loss (Student vs Teacher on Unlabeled Data)
+            unlabeled_preds_student = model.student_model(unlabeled_imgs)
+            with torch.no_grad():
+                unlabeled_preds_teacher = model.teacher_model(unlabeled_imgs)
 
-        # 2. Consistency Loss (Student vs Teacher on Unlabeled Data)
-        unlabeled_preds_student = model.student_model(unlabeled_imgs)
-        with torch.no_grad():
-            unlabeled_preds_teacher = model.teacher_model(unlabeled_imgs)
+            consistency_weight = model.get_consistency_weight(epoch)
+            teacher_logits = unlabeled_preds_teacher / settings.TEACHER_TEMPERATURE
+            consistency_loss = consistency_weight * consistency_criterion(unlabeled_preds_student, teacher_logits)
 
-        consistency_weight = model.get_consistency_weight(epoch)
-        teacher_logits = unlabeled_preds_teacher / settings.TEACHER_TEMPERATURE
-        consistency_loss = consistency_weight * consistency_criterion(unlabeled_preds_student, teacher_logits)
+            # 3. Total Loss
+            total_loss = supervised_loss + consistency_loss
 
-        # 3. Total Loss and Optimization
-        total_loss = supervised_loss + consistency_loss
-        total_loss.backward()
-        optimizer.step()
+        if scaler is not None:
+            scaler.scale(total_loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.student_model.parameters(), settings.MAX_GRAD_NORM)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            total_loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.student_model.parameters(), settings.MAX_GRAD_NORM)
+            optimizer.step()
 
         # 4. Update Teacher Parameters (EMA)
         model.update_teacher_model(current_epoch=epoch)
@@ -104,6 +114,7 @@ def train_one_epoch_fixmatch(
     supervised_criterion: nn.Module,
     device: torch.device,
     epoch: int,
+    scaler: torch.cuda.amp.GradScaler | None = None,
 ) -> tuple[float, float, float, float, float]:
     """Train using FixMatch-style pseudo-labeling."""
     model.train()
@@ -114,6 +125,9 @@ def train_one_epoch_fixmatch(
     labeled_preds_list = []
     labeled_labels_list = []
     ema_pos = None
+    if settings.FLEXMATCH_ENABLE:
+        ema_select = torch.tensor([0.0, 0.0], device=device)
+        ema_total = torch.tensor([1e-6, 1e-6], device=device)
 
     def rampup_weight(current_epoch: int) -> float:
         if settings.FIXMATCH_RAMPUP_EPOCHS <= 0:
@@ -133,23 +147,20 @@ def train_one_epoch_fixmatch(
         strong_imgs = strong_imgs.to(device)
 
         optimizer.zero_grad()
+        with torch.cuda.amp.autocast(enabled=settings.USE_AMP and device.type == "cuda"):
+            labeled_logits = model(labeled_imgs)
+            supervised_loss = supervised_criterion(labeled_logits, labeled_targets)
+            labeled_probs = torch.sigmoid(labeled_logits)
+            labeled_preds_list.extend(labeled_probs.detach().cpu().numpy())
+            labeled_labels_list.extend(labeled_targets.detach().cpu().numpy())
 
-        labeled_logits = model(labeled_imgs)
-        supervised_loss = supervised_criterion(labeled_logits, labeled_targets)
-        labeled_probs = torch.sigmoid(labeled_logits)
-        labeled_preds_list.extend(labeled_probs.detach().cpu().numpy())
-        labeled_labels_list.extend(labeled_targets.detach().cpu().numpy())
-
-        with torch.no_grad():
-            weak_logits = model(weak_imgs)
-            weak_probs = torch.sigmoid(weak_logits)
+            with torch.no_grad():
+                weak_logits = model(weak_imgs)
+                weak_probs = torch.sigmoid(weak_logits)
 
             if settings.FIXMATCH_DISTRIBUTION_ALIGNMENT and settings.TRAIN_POS_RATIO is not None:
                 batch_pos = weak_probs.mean().clamp(1e-6, 1 - 1e-6)
-                if ema_pos is None:
-                    ema_pos = batch_pos
-                else:
-                    ema_pos = settings.FIXMATCH_DA_MOMENTUM * ema_pos + (1 - settings.FIXMATCH_DA_MOMENTUM) * batch_pos
+                ema_pos = batch_pos if ema_pos is None else settings.FIXMATCH_DA_MOMENTUM * ema_pos + (1 - settings.FIXMATCH_DA_MOMENTUM) * batch_pos
                 target_pos = torch.tensor(settings.TRAIN_POS_RATIO, device=weak_probs.device)
                 scale_pos = target_pos / ema_pos
                 scale_neg = (1 - target_pos) / (1 - ema_pos)
@@ -163,23 +174,54 @@ def train_one_epoch_fixmatch(
 
             confidence = torch.maximum(weak_probs, 1 - weak_probs)
             pseudo_labels = (weak_probs >= 0.5).float()
-            if settings.FIXMATCH_USE_CLASS_THRESHOLDS and settings.TRAIN_POS_RATIO is not None and settings.TRAIN_NEG_RATIO is not None:
+            if settings.FLEXMATCH_ENABLE:
+                batch_pos = (pseudo_labels > 0.5).float()
+                batch_neg = 1.0 - batch_pos
+                ema_total = settings.FLEXMATCH_MOMENTUM * ema_total + (1 - settings.FLEXMATCH_MOMENTUM) * torch.stack([batch_neg.mean(), batch_pos.mean()])
+                select_mask = (confidence >= settings.FIXMATCH_TAU).float()
+                ema_select = settings.FLEXMATCH_MOMENTUM * ema_select + (1 - settings.FLEXMATCH_MOMENTUM) * torch.stack(
+                    [(select_mask * batch_neg).mean(), (select_mask * batch_pos).mean()]
+                )
+                class_ratio = ema_select / ema_total
+                max_ratio = class_ratio.max().clamp(min=1e-6)
+                tau_neg = max(settings.FIXMATCH_MIN_TAU, float(settings.FIXMATCH_TAU * (class_ratio[0] / max_ratio)))
+                tau_pos = max(settings.FIXMATCH_MIN_TAU, float(settings.FIXMATCH_TAU * (class_ratio[1] / max_ratio)))
+                thresholds = torch.where(
+                    pseudo_labels > 0.5,
+                    torch.tensor(tau_pos, device=confidence.device),
+                    torch.tensor(tau_neg, device=confidence.device),
+                )
+                mask = (confidence >= thresholds).float()
+            elif settings.FIXMATCH_USE_CLASS_THRESHOLDS and settings.TRAIN_POS_RATIO is not None and settings.TRAIN_NEG_RATIO is not None:
                 max_ratio = max(settings.TRAIN_POS_RATIO, settings.TRAIN_NEG_RATIO)
                 tau_pos = max(settings.FIXMATCH_MIN_TAU, settings.FIXMATCH_TAU * (settings.TRAIN_POS_RATIO / max_ratio))
                 tau_neg = max(settings.FIXMATCH_MIN_TAU, settings.FIXMATCH_TAU * (settings.TRAIN_NEG_RATIO / max_ratio))
-                thresholds = torch.where(pseudo_labels > 0.5, torch.tensor(tau_pos, device=confidence.device), torch.tensor(tau_neg, device=confidence.device))
+                thresholds = torch.where(
+                    pseudo_labels > 0.5,
+                    torch.tensor(tau_pos, device=confidence.device),
+                    torch.tensor(tau_neg, device=confidence.device),
+                )
                 mask = (confidence >= thresholds).float()
             else:
                 mask = (confidence >= settings.FIXMATCH_TAU).float()
 
-        strong_logits = model(strong_imgs)
-        unsup_loss = F.binary_cross_entropy_with_logits(strong_logits, pseudo_labels, reduction="none")
-        unsup_loss = (unsup_loss * mask).sum() / (mask.sum() + 1e-8)
+            strong_logits = model(strong_imgs)
+            unsup_loss = F.binary_cross_entropy_with_logits(strong_logits, pseudo_labels, reduction="none")
+            unsup_loss = (unsup_loss * mask).sum() / (mask.sum() + 1e-8)
 
-        lambda_u = settings.FIXMATCH_LAMBDA_U * rampup_weight(epoch)
-        total_loss = supervised_loss + lambda_u * unsup_loss
-        total_loss.backward()
-        optimizer.step()
+            lambda_u = settings.FIXMATCH_LAMBDA_U * rampup_weight(epoch)
+            total_loss = supervised_loss + lambda_u * unsup_loss
+
+        if scaler is not None:
+            scaler.scale(total_loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), settings.MAX_GRAD_NORM)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            total_loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), settings.MAX_GRAD_NORM)
+            optimizer.step()
 
         total_loss_accum += total_loss.item()
         sup_loss_accum += supervised_loss.item()
@@ -247,6 +289,7 @@ def run_training(
     """Main training loop."""
     device = torch.device(device)
     model.to(device)
+    scaler = torch.cuda.amp.GradScaler(enabled=settings.USE_AMP and device.type == "cuda")
 
     history = {
         "loss_total": [],
@@ -265,10 +308,12 @@ def run_training(
 
     for epoch in range(epochs):
         if settings.SSL_METHOD == "fixmatch":
-            avg_loss, sup_loss, con_loss, train_acc, train_auc = train_one_epoch_fixmatch(model, train_loader, unlabeled_loader, optimizer, supervised_criterion, device, epoch)
+            avg_loss, sup_loss, con_loss, train_acc, train_auc = train_one_epoch_fixmatch(
+                model, train_loader, unlabeled_loader, optimizer, supervised_criterion, device, epoch, scaler
+            )
         else:
             avg_loss, sup_loss, con_loss, train_acc, train_auc = train_one_epoch_mean_teacher(
-                model, train_loader, unlabeled_loader, optimizer, supervised_criterion, consistency_criterion, device, epoch
+                model, train_loader, unlabeled_loader, optimizer, supervised_criterion, consistency_criterion, device, epoch, scaler
             )
 
         val_acc, val_auc, val_ap, val_pos_rate = validate(model, val_loader, device)

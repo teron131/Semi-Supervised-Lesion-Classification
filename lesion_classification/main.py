@@ -1,7 +1,9 @@
+import math
+
 import torch
 from torch import nn
-from torch.optim import Adam
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import LambdaLR
 
 from .config import settings
 from .data import get_class_counts, get_dataloaders, prepare_data
@@ -51,7 +53,7 @@ def main():
         )
 
     # 5. Optimizer, Loss, Scheduler
-    optimizer = Adam(model.parameters(), lr=settings.LEARNING_RATE, weight_decay=settings.WEIGHT_DECAY)
+    optimizer = AdamW(model.parameters(), lr=settings.LEARNING_RATE, weight_decay=settings.WEIGHT_DECAY)
     if settings.SUPERVISED_LOSS == "bce":
         pos_weight_value = settings.POS_WEIGHT
         if settings.AUTO_POS_WEIGHT and benign_count > 0 and malignant_count > 0:
@@ -63,7 +65,13 @@ def main():
         supervised_criterion = BCEFocalLoss(gamma=settings.FOCAL_GAMMA, alpha=settings.FOCAL_ALPHA)
     consistency_criterion = nn.MSELoss()
 
-    scheduler = CosineAnnealingLR(optimizer=optimizer, T_max=settings.EPOCHS)
+    def lr_lambda(epoch: int) -> float:
+        if epoch < settings.WARMUP_EPOCHS:
+            return float(epoch + 1) / float(max(1, settings.WARMUP_EPOCHS))
+        progress = (epoch - settings.WARMUP_EPOCHS) / float(max(1, settings.EPOCHS - settings.WARMUP_EPOCHS))
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    scheduler = LambdaLR(optimizer=optimizer, lr_lambda=lr_lambda)
 
     # 6. Training
     model, history = run_training(
