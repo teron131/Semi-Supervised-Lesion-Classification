@@ -81,6 +81,29 @@ def _class_ratio_thresholds(pseudo_labels: torch.Tensor, base_tau: float, min_ta
     )
 
 
+def _asymmetric_thresholds(pseudo_labels: torch.Tensor) -> torch.Tensor:
+    return torch.where(
+        pseudo_labels > 0.5,
+        torch.tensor(settings.FIXMATCH_TAU_POS, device=pseudo_labels.device),
+        torch.tensor(settings.FIXMATCH_TAU_NEG, device=pseudo_labels.device),
+    )
+
+
+def _topk_mask(confidence: torch.Tensor, pseudo_labels: torch.Tensor) -> torch.Tensor:
+    mask = torch.zeros_like(confidence)
+    pos_conf = confidence[pseudo_labels > 0.5]
+    neg_conf = confidence[pseudo_labels <= 0.5]
+    if pos_conf.numel() > 0:
+        k_pos = min(settings.FIXMATCH_TOPK_POS, pos_conf.numel())
+        pos_thresh = torch.topk(pos_conf, k=k_pos, largest=True).values.min()
+        mask = mask + ((confidence >= pos_thresh) & (pseudo_labels > 0.5)).float()
+    if neg_conf.numel() > 0:
+        k_neg = min(settings.FIXMATCH_TOPK_NEG, neg_conf.numel())
+        neg_thresh = torch.topk(neg_conf, k=k_neg, largest=True).values.min()
+        mask = mask + ((confidence >= neg_thresh) & (pseudo_labels <= 0.5)).float()
+    return mask.clamp(max=1.0)
+
+
 def _flexmatch_thresholds(
     confidence: torch.Tensor,
     pseudo_labels: torch.Tensor,
@@ -168,6 +191,8 @@ def train_one_epoch_fixmatch(
             use_flexmatch = settings.FLEXMATCH_ENABLE and epoch >= settings.FLEXMATCH_WARMUP_EPOCHS
             if use_flexmatch:
                 thresholds, ema_select, ema_total = _flexmatch_thresholds(confidence, pseudo_labels, ema_select, ema_total)
+            elif settings.FIXMATCH_USE_ASYMMETRIC_TAU:
+                thresholds = _asymmetric_thresholds(pseudo_labels)
             elif settings.FIXMATCH_USE_CLASS_THRESHOLDS and settings.TRAIN_POS_RATIO is not None and settings.TRAIN_NEG_RATIO is not None:
                 thresholds = _class_ratio_thresholds(
                     pseudo_labels,
@@ -181,7 +206,10 @@ def train_one_epoch_fixmatch(
 
             strong_logits = model(strong_imgs)
             unsup_loss = F.binary_cross_entropy_with_logits(strong_logits, pseudo_labels, reduction="none")
-            mask = (confidence >= thresholds).float()
+            if settings.FIXMATCH_USE_TOPK:
+                mask = _topk_mask(confidence, pseudo_labels)
+            else:
+                mask = (confidence >= thresholds).float()
             if settings.SOFT_PSEUDO_LABELS:
                 denom = (1 - thresholds).clamp_min(1e-6)
                 weights = ((confidence - thresholds) / denom).clamp(0, 1)

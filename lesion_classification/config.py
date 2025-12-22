@@ -45,6 +45,9 @@ class Settings(BaseSettings):
 
     # Semi-supervised settings (FixMatch)
     FIXMATCH_TAU: float = 0.85
+    FIXMATCH_TAU_POS: float = 0.8
+    FIXMATCH_TAU_NEG: float = 0.9
+    FIXMATCH_USE_ASYMMETRIC_TAU: bool = True
     FIXMATCH_LAMBDA_U: float = 0.5
     FIXMATCH_RAMPUP_EPOCHS: int = 10
     FIXMATCH_MIN_TAU: float = 0.4
@@ -57,6 +60,9 @@ class Settings(BaseSettings):
     SOFT_PSEUDO_LABELS: bool = True
     FLEXMATCH_WARMUP_EPOCHS: int = 5
     FLEXMATCH_TAU_MIN: float = 0.85
+    FIXMATCH_USE_TOPK: bool = True
+    FIXMATCH_TOPK_POS: int = 8
+    FIXMATCH_TOPK_NEG: int = 16
 
     # Training control
     EARLY_STOP_PATIENCE: int = 5
