@@ -202,7 +202,7 @@ def get_transforms() -> DataTransforms:
 
     weak_transform = Augm.Compose(
         [
-            Augm.RandomResizedCrop(height=settings.IMAGE_SIZE, width=settings.IMAGE_SIZE, scale=(0.8, 1.0)),
+            Augm.RandomResizedCrop(size=(settings.IMAGE_SIZE, settings.IMAGE_SIZE), scale=(0.8, 1.0)),
             Augm.HorizontalFlip(p=0.5),
             Augm.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
             ToTensorV2(),
@@ -227,7 +227,7 @@ def get_transforms() -> DataTransforms:
 
     strong_transform = Augm.Compose(
         [
-            Augm.RandomResizedCrop(height=settings.IMAGE_SIZE, width=settings.IMAGE_SIZE, scale=(0.6, 1.0)),
+            Augm.RandomResizedCrop(size=(settings.IMAGE_SIZE, settings.IMAGE_SIZE), scale=(0.6, 1.0)),
             Augm.HorizontalFlip(p=0.5),
             *strong_augment,
             Augm.CoarseDropout(p=0.5),
