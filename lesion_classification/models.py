@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
-from torchvision.models import ResNet50_Weights, resnet50 as _resnet50
+from torchvision.models import ConvNeXt_Tiny_Weights, ResNet50_Weights, convnext_tiny as _convnext_tiny, resnet50 as _resnet50
 
 
 def conv3x3(in_planes: int, out_planes: int, stride: int = 1) -> nn.Conv2d:
@@ -133,11 +133,11 @@ class ResNet(nn.Module):
         return x
 
 
-class ResnetModel(nn.Module):
-    def __init__(self, encoder: nn.Module, num_classes: int = 1):
+class ClassifierModel(nn.Module):
+    def __init__(self, encoder: nn.Module, feature_dim: int, num_classes: int = 1):
         super().__init__()
         self.encoder = encoder
-        self.classifier = nn.Linear(2048, num_classes)
+        self.classifier = nn.Linear(feature_dim, num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.encoder(x)
@@ -154,6 +154,14 @@ def get_resnet50(pre_trained: bool = True, dropout: float | None = 0.5) -> ResNe
         new_weights = {k: state_dict[k] for k in model.state_dict() if k in state_dict}
         model.load_state_dict(new_weights, strict=False)
     return model
+
+
+def get_convnext_tiny(pre_trained: bool = True) -> tuple[nn.Module, int]:
+    weights = ConvNeXt_Tiny_Weights.IMAGENET1K_V1 if pre_trained else None
+    model = _convnext_tiny(weights=weights)
+    feature_dim = model.classifier[2].in_features
+    model.classifier = nn.Identity()
+    return model, feature_dim
 
 
 class MeanTeacherModel(nn.Module):

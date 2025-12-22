@@ -6,7 +6,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from .config import settings
 from .data import get_class_counts, get_dataloaders, prepare_data
 from .losses import BCEFocalLoss
-from .models import MeanTeacherModel, ResnetModel, get_resnet50
+from .models import ClassifierModel, MeanTeacherModel, get_convnext_tiny, get_resnet50
 from .trainer import run_training
 from .utils import plot_history, save_history, set_seed
 
@@ -34,8 +34,12 @@ def main():
     train_loader, unlabeled_loader, val_loader = get_dataloaders(settings.BATCH_SIZE)
 
     # 4. Model
-    resnet50 = get_resnet50(pre_trained=settings.PRE_TRAINED, dropout=settings.DROPOUT)
-    base_model = ResnetModel(resnet50, settings.NUM_CLASSES)
+    if settings.BACKBONE == "convnext_tiny":
+        backbone, feature_dim = get_convnext_tiny(pre_trained=settings.PRE_TRAINED)
+    else:
+        backbone = get_resnet50(pre_trained=settings.PRE_TRAINED, dropout=settings.DROPOUT)
+        feature_dim = 2048
+    base_model = ClassifierModel(backbone, feature_dim, settings.NUM_CLASSES)
     if settings.SSL_METHOD == "fixmatch":
         model = base_model
     else:

@@ -222,7 +222,7 @@ def get_transforms():
                 ],
                 p=0.8,
             ),
-            Augm.CoarseDropout(max_holes=2, max_height=16, max_width=16, fill_value=0, p=0.5),
+            Augm.CoarseDropout(p=0.5),
             Augm.RandomBrightnessContrast(p=0.2),
             Augm.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
             ToTensorV2(),

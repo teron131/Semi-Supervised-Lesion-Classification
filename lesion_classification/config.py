@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     PRE_TRAINED: bool = True
     DROPOUT: float = 0.5
     NUM_CLASSES: int = 1
+    BACKBONE: str = "convnext_tiny"  # "resnet50" or "convnext_tiny"
 
     # Loss Settings
     FOCAL_GAMMA: float = 2.0
