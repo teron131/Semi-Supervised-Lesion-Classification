@@ -161,7 +161,8 @@ def get_convnext_tiny(pre_trained: bool = True) -> tuple[nn.Module, int]:
     model = _convnext_tiny(weights=weights)
     feature_dim = model.classifier[2].in_features
     model.classifier = nn.Identity()
-    return model, feature_dim
+    backbone = nn.Sequential(model, nn.Flatten(1))
+    return backbone, feature_dim
 
 
 class MeanTeacherModel(nn.Module):
