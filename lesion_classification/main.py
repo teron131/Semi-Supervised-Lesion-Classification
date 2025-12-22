@@ -13,13 +13,7 @@ from .trainer import run_training
 from .utils import plot_history, save_history, set_seed
 
 
-def main():
-    # 1. Setup
-    set_seed(42)
-
-    # 2. Data Preparation (if needed)
-    prepare_data(settings.DATA_DIR)
-
+def _update_class_ratios() -> tuple[int, int]:
     benign_count, malignant_count = get_class_counts(settings.TRAIN_DIR)
     total_count = benign_count + malignant_count
     if total_count > 0:
@@ -31,6 +25,27 @@ def main():
     val_total = val_benign + val_malignant
     if val_total > 0:
         print(f"Val split: benign={val_benign} malignant={val_malignant}")
+    return benign_count, malignant_count
+
+
+def _build_supervised_loss(benign_count: int, malignant_count: int) -> nn.Module:
+    if settings.SUPERVISED_LOSS == "bce":
+        pos_weight_value = settings.POS_WEIGHT
+        if settings.AUTO_POS_WEIGHT and benign_count > 0 and malignant_count > 0:
+            pos_weight_value = min(benign_count / malignant_count, settings.POS_WEIGHT_MAX)
+        pos_weight = torch.tensor([pos_weight_value], dtype=torch.float32, device=settings.DEVICE)
+        return nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    return BCEFocalLoss(gamma=settings.FOCAL_GAMMA, alpha=settings.FOCAL_ALPHA)
+
+
+def main():
+    # 1. Setup
+    set_seed(42)
+
+    # 2. Data Preparation (if needed)
+    prepare_data(settings.DATA_DIR)
+
+    benign_count, malignant_count = _update_class_ratios()
 
     # 3. Data Loaders
     train_loader, unlabeled_loader, val_loader = get_dataloaders(settings.BATCH_SIZE)
@@ -41,15 +56,8 @@ def main():
 
     # 5. Optimizer, Loss, Scheduler
     optimizer = AdamW(model.parameters(), lr=settings.LEARNING_RATE, weight_decay=settings.WEIGHT_DECAY)
-    if settings.SUPERVISED_LOSS == "bce":
-        pos_weight_value = settings.POS_WEIGHT
-        if settings.AUTO_POS_WEIGHT and benign_count > 0 and malignant_count > 0:
-            pos_weight_value = benign_count / malignant_count
-            pos_weight_value = min(pos_weight_value, settings.POS_WEIGHT_MAX)
-        pos_weight = torch.tensor([pos_weight_value], dtype=torch.float32, device=settings.DEVICE)
-        supervised_criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    else:
-        supervised_criterion = BCEFocalLoss(gamma=settings.FOCAL_GAMMA, alpha=settings.FOCAL_ALPHA)
+    supervised_criterion = _build_supervised_loss(benign_count, malignant_count)
+
     def lr_lambda(epoch: int) -> float:
         if epoch < settings.WARMUP_EPOCHS:
             return float(epoch + 1) / float(max(1, settings.WARMUP_EPOCHS))

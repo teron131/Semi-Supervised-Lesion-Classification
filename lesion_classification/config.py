@@ -19,13 +19,11 @@ class Settings(BaseSettings):
     EPOCHS: int = 20
     LEARNING_RATE: float = 1e-4
     WEIGHT_DECAY: float = 1e-5
-    EMA_DECAY: float = 0.99
 
     # Model Settings
     DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
     PRE_TRAINED: bool = True
     NUM_CLASSES: int = 1
-    BACKBONE: str = "convnext_tiny"
 
     # Loss Settings
     FOCAL_GAMMA: float = 2.0

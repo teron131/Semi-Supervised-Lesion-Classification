@@ -14,6 +14,71 @@ from torch.utils.data import DataLoader
 from .config import settings
 
 
+def _rampup_weight(current_epoch: int, rampup_epochs: int) -> float:
+    if rampup_epochs <= 0:
+        return 1.0
+    epoch = min(float(current_epoch), float(rampup_epochs))
+    phase = 1.0 - epoch / float(rampup_epochs)
+    return float(np.exp(-5.0 * phase * phase))
+
+
+def _apply_distribution_alignment(
+    probs: torch.Tensor,
+    ema_pos: torch.Tensor | None,
+    target_pos: float,
+    momentum: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    batch_pos = probs.mean().clamp(1e-6, 1 - 1e-6)
+    ema_pos = batch_pos if ema_pos is None else momentum * ema_pos + (1 - momentum) * batch_pos
+    target_pos_tensor = torch.tensor(target_pos, device=probs.device)
+    scale_pos = target_pos_tensor / ema_pos
+    scale_neg = (1 - target_pos_tensor) / (1 - ema_pos)
+    adjusted = probs * scale_pos
+    aligned = adjusted / (adjusted + (1 - probs) * scale_neg)
+    return aligned, ema_pos
+
+
+def _sharpen_probs(probs: torch.Tensor, temperature: float) -> torch.Tensor:
+    if temperature == 1.0:
+        return probs
+    sharpened = probs.pow(1.0 / temperature)
+    return sharpened / (sharpened + (1 - probs).pow(1.0 / temperature))
+
+
+def _class_ratio_thresholds(pseudo_labels: torch.Tensor, base_tau: float, min_tau: float, pos_ratio: float, neg_ratio: float) -> torch.Tensor:
+    max_ratio = max(pos_ratio, neg_ratio)
+    tau_pos = max(min_tau, base_tau * (pos_ratio / max_ratio))
+    tau_neg = max(min_tau, base_tau * (neg_ratio / max_ratio))
+    return torch.where(
+        pseudo_labels > 0.5,
+        torch.tensor(tau_pos, device=pseudo_labels.device),
+        torch.tensor(tau_neg, device=pseudo_labels.device),
+    )
+
+
+def _flexmatch_thresholds(
+    confidence: torch.Tensor,
+    pseudo_labels: torch.Tensor,
+    ema_select: torch.Tensor,
+    ema_total: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    batch_pos = (pseudo_labels > 0.5).float()
+    batch_neg = 1.0 - batch_pos
+    ema_total = settings.FLEXMATCH_MOMENTUM * ema_total + (1 - settings.FLEXMATCH_MOMENTUM) * torch.stack([batch_neg.mean(), batch_pos.mean()])
+    select_mask = (confidence >= settings.FIXMATCH_TAU).float()
+    ema_select = settings.FLEXMATCH_MOMENTUM * ema_select + (1 - settings.FLEXMATCH_MOMENTUM) * torch.stack([(select_mask * batch_neg).mean(), (select_mask * batch_pos).mean()])
+    class_ratio = ema_select / ema_total
+    max_ratio = class_ratio.max().clamp(min=1e-6)
+    tau_neg = max(settings.FIXMATCH_MIN_TAU, float(settings.FIXMATCH_TAU * (class_ratio[0] / max_ratio)))
+    tau_pos = max(settings.FIXMATCH_MIN_TAU, float(settings.FIXMATCH_TAU * (class_ratio[1] / max_ratio)))
+    thresholds = torch.where(
+        pseudo_labels > 0.5,
+        torch.tensor(tau_pos, device=confidence.device),
+        torch.tensor(tau_neg, device=confidence.device),
+    )
+    return thresholds, ema_select, ema_total
+
+
 def train_one_epoch_fixmatch(
     model: nn.Module,
     labeled_loader: DataLoader,
@@ -37,13 +102,6 @@ def train_one_epoch_fixmatch(
         ema_select = torch.tensor([0.0, 0.0], device=device)
         ema_total = torch.tensor([1e-6, 1e-6], device=device)
 
-    def rampup_weight(current_epoch: int) -> float:
-        if settings.FIXMATCH_RAMPUP_EPOCHS <= 0:
-            return 1.0
-        epoch = min(float(current_epoch), float(settings.FIXMATCH_RAMPUP_EPOCHS))
-        phase = 1.0 - epoch / float(settings.FIXMATCH_RAMPUP_EPOCHS)
-        return float(np.exp(-5.0 * phase * phase))
-
     labeled_iter = itertools.cycle(labeled_loader)
     for weak_imgs, strong_imgs in unlabeled_loader:
         labeled_imgs, labeled_targets = next(labeled_iter)
@@ -55,7 +113,10 @@ def train_one_epoch_fixmatch(
         strong_imgs = strong_imgs.to(device)
 
         optimizer.zero_grad()
-        with torch.amp.autocast(device_type="cuda" if device.type == "cuda" else "cpu", enabled=settings.USE_AMP):
+        with torch.amp.autocast(
+            device_type="cuda" if device.type == "cuda" else "cpu",
+            enabled=settings.USE_AMP and device.type == "cuda",
+        ):
             labeled_logits = model(labeled_imgs)
             supervised_loss = supervised_criterion(labeled_logits, labeled_targets)
             labeled_probs = torch.sigmoid(labeled_logits)
@@ -67,47 +128,27 @@ def train_one_epoch_fixmatch(
                 weak_probs = torch.sigmoid(weak_logits)
 
             if settings.FIXMATCH_DISTRIBUTION_ALIGNMENT and settings.TRAIN_POS_RATIO is not None:
-                batch_pos = weak_probs.mean().clamp(1e-6, 1 - 1e-6)
-                ema_pos = batch_pos if ema_pos is None else settings.FIXMATCH_DA_MOMENTUM * ema_pos + (1 - settings.FIXMATCH_DA_MOMENTUM) * batch_pos
-                target_pos = torch.tensor(settings.TRAIN_POS_RATIO, device=weak_probs.device)
-                scale_pos = target_pos / ema_pos
-                scale_neg = (1 - target_pos) / (1 - ema_pos)
-                adjusted = weak_probs * scale_pos
-                weak_probs = adjusted / (adjusted + (1 - weak_probs) * scale_neg)
+                weak_probs, ema_pos = _apply_distribution_alignment(
+                    weak_probs,
+                    ema_pos,
+                    settings.TRAIN_POS_RATIO,
+                    settings.FIXMATCH_DA_MOMENTUM,
+                )
 
-            if settings.FIXMATCH_SHARPEN_T != 1.0:
-                t = settings.FIXMATCH_SHARPEN_T
-                sharpened = weak_probs.pow(1.0 / t)
-                weak_probs = sharpened / (sharpened + (1 - weak_probs).pow(1.0 / t))
+            weak_probs = _sharpen_probs(weak_probs, settings.FIXMATCH_SHARPEN_T)
 
             confidence = torch.maximum(weak_probs, 1 - weak_probs)
             pseudo_labels = (weak_probs >= 0.5).float()
             if settings.FLEXMATCH_ENABLE:
-                batch_pos = (pseudo_labels > 0.5).float()
-                batch_neg = 1.0 - batch_pos
-                ema_total = settings.FLEXMATCH_MOMENTUM * ema_total + (1 - settings.FLEXMATCH_MOMENTUM) * torch.stack([batch_neg.mean(), batch_pos.mean()])
-                select_mask = (confidence >= settings.FIXMATCH_TAU).float()
-                ema_select = settings.FLEXMATCH_MOMENTUM * ema_select + (1 - settings.FLEXMATCH_MOMENTUM) * torch.stack(
-                    [(select_mask * batch_neg).mean(), (select_mask * batch_pos).mean()]
-                )
-                class_ratio = ema_select / ema_total
-                max_ratio = class_ratio.max().clamp(min=1e-6)
-                tau_neg = max(settings.FIXMATCH_MIN_TAU, float(settings.FIXMATCH_TAU * (class_ratio[0] / max_ratio)))
-                tau_pos = max(settings.FIXMATCH_MIN_TAU, float(settings.FIXMATCH_TAU * (class_ratio[1] / max_ratio)))
-                thresholds = torch.where(
-                    pseudo_labels > 0.5,
-                    torch.tensor(tau_pos, device=confidence.device),
-                    torch.tensor(tau_neg, device=confidence.device),
-                )
+                thresholds, ema_select, ema_total = _flexmatch_thresholds(confidence, pseudo_labels, ema_select, ema_total)
                 mask = (confidence >= thresholds).float()
             elif settings.FIXMATCH_USE_CLASS_THRESHOLDS and settings.TRAIN_POS_RATIO is not None and settings.TRAIN_NEG_RATIO is not None:
-                max_ratio = max(settings.TRAIN_POS_RATIO, settings.TRAIN_NEG_RATIO)
-                tau_pos = max(settings.FIXMATCH_MIN_TAU, settings.FIXMATCH_TAU * (settings.TRAIN_POS_RATIO / max_ratio))
-                tau_neg = max(settings.FIXMATCH_MIN_TAU, settings.FIXMATCH_TAU * (settings.TRAIN_NEG_RATIO / max_ratio))
-                thresholds = torch.where(
-                    pseudo_labels > 0.5,
-                    torch.tensor(tau_pos, device=confidence.device),
-                    torch.tensor(tau_neg, device=confidence.device),
+                thresholds = _class_ratio_thresholds(
+                    pseudo_labels,
+                    settings.FIXMATCH_TAU,
+                    settings.FIXMATCH_MIN_TAU,
+                    settings.TRAIN_POS_RATIO,
+                    settings.TRAIN_NEG_RATIO,
                 )
                 mask = (confidence >= thresholds).float()
             else:
@@ -117,7 +158,7 @@ def train_one_epoch_fixmatch(
             unsup_loss = F.binary_cross_entropy_with_logits(strong_logits, pseudo_labels, reduction="none")
             unsup_loss = (unsup_loss * mask).sum() / (mask.sum() + 1e-8)
 
-            lambda_u = settings.FIXMATCH_LAMBDA_U * rampup_weight(epoch)
+            lambda_u = settings.FIXMATCH_LAMBDA_U * _rampup_weight(epoch, settings.FIXMATCH_RAMPUP_EPOCHS)
             total_loss = supervised_loss + lambda_u * unsup_loss
 
         if scaler is not None:
@@ -150,14 +191,13 @@ def train_one_epoch_fixmatch(
 
 
 @torch.no_grad()
-def validate(model: nn.Module, val_loader: DataLoader, device: torch.device) -> tuple[float, float, float, float]:
+def validate(
+    model: nn.Module,
+    val_loader: DataLoader,
+    device: torch.device,
+) -> tuple[float, float, float, float]:
     """Validate the student model."""
-    if hasattr(model, "student_model"):
-        model.student_model.eval()
-        eval_model = model.student_model
-    else:
-        model.eval()
-        eval_model = model
+    model.eval()
     val_labels_list = []
     val_preds_list = []
 
@@ -165,7 +205,7 @@ def validate(model: nn.Module, val_loader: DataLoader, device: torch.device) -> 
         imgs = imgs.to(device)
         targets = targets.float().unsqueeze(1).to(device)
 
-        logits = eval_model(imgs)
+        logits = model(imgs)
         preds = torch.sigmoid(logits)
 
         val_preds_list.extend(preds.cpu().numpy())
@@ -201,7 +241,7 @@ def run_training(
     history = {
         "loss_total": [],
         "loss_sup": [],
-        "loss_con": [],
+        "loss_unsup": [],
         "train_acc": [],
         "train_auc": [],
         "val_acc": [],
@@ -214,7 +254,9 @@ def run_training(
     patience_left = settings.EARLY_STOP_PATIENCE
 
     for epoch in range(epochs):
-        avg_loss, sup_loss, con_loss, train_acc, train_auc = train_one_epoch_fixmatch(model, train_loader, unlabeled_loader, optimizer, supervised_criterion, device, epoch, scaler)
+        avg_loss, sup_loss, unsup_loss, train_acc, train_auc = train_one_epoch_fixmatch(
+            model, train_loader, unlabeled_loader, optimizer, supervised_criterion, device, epoch, scaler
+        )
 
         val_acc, val_auc, val_ap, val_pos_rate = validate(model, val_loader, device)
         scheduler.step()
@@ -222,7 +264,7 @@ def run_training(
         # Update history
         history["loss_total"].append(avg_loss)
         history["loss_sup"].append(sup_loss)
-        history["loss_con"].append(con_loss)
+        history["loss_unsup"].append(unsup_loss)
         history["train_acc"].append(train_acc)
         history["train_auc"].append(train_auc)
         history["val_acc"].append(val_acc)

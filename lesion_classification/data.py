@@ -1,4 +1,4 @@
-import os
+from dataclasses import dataclass
 from pathlib import Path
 import random
 import shutil
@@ -16,6 +16,17 @@ from .config import ensure_dirs, settings
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
+IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
+
+
+@dataclass(frozen=True)
+class DataTransforms:
+    normalize: Augm.Compose
+    geo: Augm.Compose
+    color: Augm.Compose
+    pca: Augm.Compose
+    weak: Augm.Compose
+    strong: Augm.Compose
 
 
 def _read_rgb(image_filepath: str | Path) -> np.ndarray:
@@ -25,12 +36,22 @@ def _read_rgb(image_filepath: str | Path) -> np.ndarray:
     return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
 
+def _has_images(directory: Path) -> bool:
+    return any(directory.glob("*.jpg")) or any(directory.glob("*.jpeg")) or any(directory.glob("*.png"))
+
+
+def _list_images(directory: Path) -> list[Path]:
+    return sorted([path for path in directory.iterdir() if path.suffix.lower() in IMAGE_EXTENSIONS])
+
+
+def _label_from_path(image_filepath: str | Path) -> float:
+    parent_dir = Path(image_filepath).parent.name
+    return 1.0 if parent_dir == "malignant" else 0.0
+
+
 def prepare_data(data_root: Path):
     """Split raw ISIC data into train, unlabeled, and val folders."""
     ensure_dirs()
-
-    def _dir_has_images(directory: Path) -> bool:
-        return any(directory.glob("*.jpg")) or any(directory.glob("*.jpeg")) or any(directory.glob("*.png"))
 
     split_dirs = [
         settings.TRAIN_DIR / "benign",
@@ -39,7 +60,7 @@ def prepare_data(data_root: Path):
         settings.VAL_DIR / "benign",
         settings.VAL_DIR / "malignant",
     ]
-    if any(_dir_has_images(directory) for directory in split_dirs):
+    if any(_has_images(directory) for directory in split_dirs):
         print("Split directories already contain images. Skipping data split.")
         return
 
@@ -88,8 +109,8 @@ def prepare_data(data_root: Path):
 
 
 def get_class_counts(train_dir: Path) -> tuple[int, int]:
-    benign = len(list((train_dir / "benign").glob("*.jpg")))
-    malignant = len(list((train_dir / "malignant").glob("*.jpg")))
+    benign = len(_list_images(train_dir / "benign"))
+    malignant = len(_list_images(train_dir / "malignant"))
     return benign, malignant
 
 
@@ -108,8 +129,7 @@ class AugmentedDataset(Dataset):
         image = _read_rgb(image_filepath)
 
         # Label is 1.0 for malignant, 0.0 for benign based on folder name
-        parent_dir = os.path.basename(os.path.dirname(image_filepath))
-        label = 1.0 if parent_dir == "malignant" else 0.0
+        label = _label_from_path(image_filepath)
 
         if self.transform is not None:
             image = self.transform(image=image)["image"]
@@ -117,45 +137,26 @@ class AugmentedDataset(Dataset):
 
 
 class UnlabeledDataset(Dataset):
-    """Dataset class for unlabeled data."""
+    """Dataset class for unlabeled data with weak/strong views."""
 
-    def __init__(
-        self,
-        root: str | Path,
-        transform: Augm.Compose | None = None,
-        weak_transform: Augm.Compose | None = None,
-        strong_transform: Augm.Compose | None = None,
-    ):
+    def __init__(self, root: str | Path, weak_transform: Augm.Compose, strong_transform: Augm.Compose):
         self.root = Path(root)
-        self.transform = transform
         self.weak_transform = weak_transform
         self.strong_transform = strong_transform
-        self.samples = self._gather_unlabeled_samples(self.root)
+        self.samples = _list_images(self.root)
 
-    def _gather_unlabeled_samples(self, root: Path) -> list[tuple[Path, int]]:
-        samples = []
-        for filename in os.listdir(root):
-            if filename.lower().endswith((".jpg", ".jpeg", ".png")):
-                path = root / filename
-                samples.append((path, -1))  # -1 indicates no label
-        return samples
-
-    def __getitem__(self, index: int) -> tuple[torch.Tensor, int]:
-        path, target = self.samples[index]
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        path = self.samples[index]
         img = _read_rgb(path)
-        if self.weak_transform is not None and self.strong_transform is not None:
-            weak = self.weak_transform(image=img)["image"]
-            strong = self.strong_transform(image=img)["image"]
-            return weak, strong
-        if self.transform is not None:
-            img = self.transform(image=img)["image"]
-        return img, target
+        weak = self.weak_transform(image=img)["image"]
+        strong = self.strong_transform(image=img)["image"]
+        return weak, strong
 
     def __len__(self) -> int:
         return len(self.samples)
 
 
-def get_transforms():
+def get_transforms() -> DataTransforms:
     """Define data transformations."""
     normalization = Augm.Compose(
         [
@@ -229,20 +230,38 @@ def get_transforms():
         ]
     )
 
-    return normalization, geo_transform, col_transform, pca_transform, weak_transform, strong_transform
+    return DataTransforms(
+        normalize=normalization,
+        geo=geo_transform,
+        color=col_transform,
+        pca=pca_transform,
+        weak=weak_transform,
+        strong=strong_transform,
+    )
+
+
+def _build_weighted_sampler(train_dataset: ConcatDataset, benign_count: int, malignant_count: int) -> WeightedRandomSampler:
+    label_weights = []
+    benign_weight = 1.0 / max(benign_count, 1)
+    malignant_weight = 1.0 / max(malignant_count, 1)
+    for dataset in train_dataset.datasets:
+        if isinstance(dataset, AugmentedDataset):
+            for filepath in dataset.images_filepaths:
+                label_weights.append(malignant_weight if _label_from_path(filepath) == 1.0 else benign_weight)
+    return WeightedRandomSampler(label_weights, num_samples=len(label_weights), replacement=True)
 
 
 def get_dataloaders(batch_size: int = 32):
     """Prepare dataloaders for training, unlabeled, and validation sets."""
-    normalization, geo_t, col_t, pca_t, weak_t, strong_t = get_transforms()
+    transforms = get_transforms()
 
     # Paths
     benign_dir = settings.TRAIN_DIR / "benign"
     malignant_dir = settings.TRAIN_DIR / "malignant"
 
     # Get filepaths for upsampling minority class (malignant)
-    benign_filepaths = sorted(benign_dir.glob("*.jpg"))
-    malignant_filepaths = sorted(malignant_dir.glob("*.jpg"))
+    benign_filepaths = _list_images(benign_dir)
+    malignant_filepaths = _list_images(malignant_dir)
 
     # Upsampling (Malignant x2 as in notebook)
     aug_train_filepaths = [*benign_filepaths, *malignant_filepaths]
@@ -252,31 +271,23 @@ def get_dataloaders(batch_size: int = 32):
     random.shuffle(aug_train_filepaths)
 
     # Create augmented datasets
-    geo_ds = AugmentedDataset(aug_train_filepaths, transform=geo_t)
-    col_ds = AugmentedDataset(aug_train_filepaths, transform=col_t)
-    pca_ds = AugmentedDataset(aug_train_filepaths, transform=pca_t)
+    geo_ds = AugmentedDataset(aug_train_filepaths, transform=transforms.geo)
+    col_ds = AugmentedDataset(aug_train_filepaths, transform=transforms.color)
+    pca_ds = AugmentedDataset(aug_train_filepaths, transform=transforms.pca)
     aug_train_dataset = ConcatDataset([geo_ds, col_ds, pca_ds])
 
     standard_train_filepaths = [*benign_filepaths, *malignant_filepaths]
-    standard_train_dataset = AugmentedDataset(standard_train_filepaths, transform=normalization)
+    standard_train_dataset = AugmentedDataset(standard_train_filepaths, transform=transforms.normalize)
     train_dataset = ConcatDataset([standard_train_dataset, aug_train_dataset])
 
-    unlabeled_dataset = UnlabeledDataset(settings.UNLABELED_DIR, weak_transform=weak_t, strong_transform=strong_t)
-    val_filepaths = sorted((settings.VAL_DIR / "benign").glob("*.jpg")) + sorted((settings.VAL_DIR / "malignant").glob("*.jpg"))
-    val_dataset = AugmentedDataset(val_filepaths, transform=normalization)
+    unlabeled_dataset = UnlabeledDataset(settings.UNLABELED_DIR, weak_transform=transforms.weak, strong_transform=transforms.strong)
+    val_filepaths = _list_images(settings.VAL_DIR / "benign") + _list_images(settings.VAL_DIR / "malignant")
+    val_dataset = AugmentedDataset(val_filepaths, transform=transforms.normalize)
 
     generator = torch.Generator().manual_seed(settings.SPLIT_SEED)
     sampler = None
     if settings.USE_WEIGHTED_SAMPLER:
-        label_weights = []
-        benign_weight = 1.0 / max(len(benign_filepaths), 1)
-        malignant_weight = 1.0 / max(len(malignant_filepaths), 1)
-        for dataset in train_dataset.datasets:
-            if isinstance(dataset, AugmentedDataset):
-                for filepath in dataset.images_filepaths:
-                    parent_dir = Path(filepath).parent.name
-                    label_weights.append(malignant_weight if parent_dir == "malignant" else benign_weight)
-        sampler = WeightedRandomSampler(label_weights, num_samples=len(label_weights), replacement=True)
+        sampler = _build_weighted_sampler(train_dataset, len(benign_filepaths), len(malignant_filepaths))
 
     train_loader = DataLoader(
         train_dataset,
