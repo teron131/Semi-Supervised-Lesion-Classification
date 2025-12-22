@@ -1,6 +1,14 @@
 # Semi-Supervised Lesion Classification
 ***Colaboration with [UrMBCMRabbont](https://github.com/UrMBCMRabbont)***
 
+## Modernized Implementation Notes
+- Backbone: ConvNeXt-Tiny (ImageNet pretrained)
+- SSL: FixMatch (weak/strong views with RandAugment/TrivialAugment fallback + Cutout)
+- Loss: BCEWithLogitsLoss with pos_weight (optional focal)
+- Optimizer: AdamW with cosine decay and warmup
+- Evaluation: Acc, AUC, AP, with EMA weights for validation
+- Outputs: `results/history.csv` and `results/training_curves.png`
+
 *The Final Project 1 of HKUST ELEC4010N - Artificial Intelligence for Medical Image Analysis*
 
 Implementing semi-supervised binary classification on a dermoscopic lesion dataset by Mean Teacher model and ResNet.

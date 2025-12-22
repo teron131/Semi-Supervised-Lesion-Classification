@@ -14,6 +14,31 @@ from torch.utils.data import DataLoader
 from .config import settings
 
 
+class EMA:
+    def __init__(self, model: nn.Module, decay: float):
+        self.decay = decay
+        self.shadow = {name: param.detach().clone() for name, param in model.named_parameters()}
+        self.backup: dict[str, torch.Tensor] = {}
+
+    def update(self, model: nn.Module) -> None:
+        for name, param in model.named_parameters():
+            if name not in self.shadow:
+                self.shadow[name] = param.detach().clone()
+            else:
+                self.shadow[name].mul_(self.decay).add_(param.detach(), alpha=1 - self.decay)
+
+    def apply(self, model: nn.Module) -> None:
+        self.backup = {}
+        for name, param in model.named_parameters():
+            self.backup[name] = param.detach().clone()
+            param.data.copy_(self.shadow[name])
+
+    def restore(self, model: nn.Module) -> None:
+        for name, param in model.named_parameters():
+            param.data.copy_(self.backup[name])
+        self.backup = {}
+
+
 def _rampup_weight(current_epoch: int, rampup_epochs: int) -> float:
     if rampup_epochs <= 0:
         return 1.0
@@ -87,7 +112,8 @@ def train_one_epoch_fixmatch(
     supervised_criterion: nn.Module,
     device: torch.device,
     epoch: int,
-    scaler: torch.cuda.amp.GradScaler | None = None,
+    scaler: torch.amp.GradScaler | None = None,
+    ema: EMA | None = None,
 ) -> tuple[float, float, float, float, float]:
     """Train using FixMatch-style pseudo-labeling."""
     model.train()
@@ -113,10 +139,7 @@ def train_one_epoch_fixmatch(
         strong_imgs = strong_imgs.to(device)
 
         optimizer.zero_grad()
-        with torch.amp.autocast(
-            device_type="cuda" if device.type == "cuda" else "cpu",
-            enabled=settings.USE_AMP and device.type == "cuda",
-        ):
+        with torch.amp.autocast(device_type="cuda", enabled=settings.USE_AMP and device.type == "cuda"):
             labeled_logits = model(labeled_imgs)
             supervised_loss = supervised_criterion(labeled_logits, labeled_targets)
             labeled_probs = torch.sigmoid(labeled_logits)
@@ -141,7 +164,6 @@ def train_one_epoch_fixmatch(
             pseudo_labels = (weak_probs >= 0.5).float()
             if settings.FLEXMATCH_ENABLE:
                 thresholds, ema_select, ema_total = _flexmatch_thresholds(confidence, pseudo_labels, ema_select, ema_total)
-                mask = (confidence >= thresholds).float()
             elif settings.FIXMATCH_USE_CLASS_THRESHOLDS and settings.TRAIN_POS_RATIO is not None and settings.TRAIN_NEG_RATIO is not None:
                 thresholds = _class_ratio_thresholds(
                     pseudo_labels,
@@ -150,13 +172,18 @@ def train_one_epoch_fixmatch(
                     settings.TRAIN_POS_RATIO,
                     settings.TRAIN_NEG_RATIO,
                 )
-                mask = (confidence >= thresholds).float()
             else:
-                mask = (confidence >= settings.FIXMATCH_TAU).float()
+                thresholds = torch.full_like(confidence, settings.FIXMATCH_TAU)
 
             strong_logits = model(strong_imgs)
             unsup_loss = F.binary_cross_entropy_with_logits(strong_logits, pseudo_labels, reduction="none")
-            unsup_loss = (unsup_loss * mask).sum() / (mask.sum() + 1e-8)
+            if settings.SOFT_PSEUDO_LABELS:
+                denom = (1 - thresholds).clamp_min(1e-6)
+                weights = ((confidence - thresholds) / denom).clamp(0, 1)
+                unsup_loss = (unsup_loss * weights).sum() / (weights.sum() + 1e-8)
+            else:
+                mask = (confidence >= thresholds).float()
+                unsup_loss = (unsup_loss * mask).sum() / (mask.sum() + 1e-8)
 
             lambda_u = settings.FIXMATCH_LAMBDA_U * _rampup_weight(epoch, settings.FIXMATCH_RAMPUP_EPOCHS)
             total_loss = supervised_loss + lambda_u * unsup_loss
@@ -171,6 +198,8 @@ def train_one_epoch_fixmatch(
             total_loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), settings.MAX_GRAD_NORM)
             optimizer.step()
+        if ema is not None:
+            ema.update(model)
 
         total_loss_accum += total_loss.item()
         sup_loss_accum += supervised_loss.item()
@@ -195,9 +224,12 @@ def validate(
     model: nn.Module,
     val_loader: DataLoader,
     device: torch.device,
+    ema: EMA | None = None,
 ) -> tuple[float, float, float, float]:
     """Validate the student model."""
     model.eval()
+    if ema is not None:
+        ema.apply(model)
     val_labels_list = []
     val_preds_list = []
 
@@ -219,6 +251,9 @@ def validate(
     ap = average_precision_score(val_labels, val_preds) if len(np.unique(val_labels)) > 1 else 0.0
     pos_rate = float(np.mean(np.round(val_preds))) if len(val_preds) > 0 else 0.0
 
+    if ema is not None:
+        ema.restore(model)
+
     return acc, auc, ap, pos_rate
 
 
@@ -237,6 +272,7 @@ def run_training(
     device = torch.device(device)
     model.to(device)
     scaler = torch.amp.GradScaler("cuda", enabled=settings.USE_AMP and device.type == "cuda")
+    ema = EMA(model, settings.EMA_DECAY) if settings.EMA_ENABLE else None
 
     history = {
         "loss_total": [],
@@ -255,10 +291,10 @@ def run_training(
 
     for epoch in range(epochs):
         avg_loss, sup_loss, unsup_loss, train_acc, train_auc = train_one_epoch_fixmatch(
-            model, train_loader, unlabeled_loader, optimizer, supervised_criterion, device, epoch, scaler
+            model, train_loader, unlabeled_loader, optimizer, supervised_criterion, device, epoch, scaler, ema
         )
 
-        val_acc, val_auc, val_ap, val_pos_rate = validate(model, val_loader, device)
+        val_acc, val_auc, val_ap, val_pos_rate = validate(model, val_loader, device, ema)
         scheduler.step()
 
         # Update history
@@ -280,7 +316,15 @@ def run_training(
         metric_value = val_auc if settings.BEST_METRIC == "val_auc" else val_ap
         if metric_value > best_metric:
             best_metric = metric_value
-            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            if ema is not None:
+                best_state = {}
+                for name, tensor in model.state_dict().items():
+                    if name in ema.shadow:
+                        best_state[name] = ema.shadow[name].detach().cpu().clone()
+                    else:
+                        best_state[name] = tensor.detach().cpu().clone()
+            else:
+                best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
             patience_left = settings.EARLY_STOP_PATIENCE
             if settings.SAVE_BEST_CHECKPOINT:
                 checkpoint_dir = Path(settings.CHECKPOINT_DIR)
@@ -293,6 +337,7 @@ def run_training(
                         "val_ap": val_ap,
                         "val_acc": val_acc,
                         "best_metric": settings.BEST_METRIC,
+                        "ema_enabled": settings.EMA_ENABLE,
                     },
                     checkpoint_dir / "best.pt",
                 )

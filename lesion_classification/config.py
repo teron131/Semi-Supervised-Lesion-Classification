@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     FIXMATCH_SHARPEN_T: float = 1.0
     FLEXMATCH_ENABLE: bool = True
     FLEXMATCH_MOMENTUM: float = 0.7
+    SOFT_PSEUDO_LABELS: bool = True
 
     # Training control
     EARLY_STOP_PATIENCE: int = 5
@@ -64,6 +65,8 @@ class Settings(BaseSettings):
     WARMUP_EPOCHS: int = 2
     USE_AMP: bool = True
     MAX_GRAD_NORM: float = 1.0
+    EMA_ENABLE: bool = True
+    EMA_DECAY: float = 0.999
 
     # Derived stats (populated at runtime)
     TRAIN_POS_RATIO: float | None = None

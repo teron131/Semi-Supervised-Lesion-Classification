@@ -202,19 +202,19 @@ def get_transforms() -> DataTransforms:
 
     weak_transform = Augm.Compose(
         [
-            Augm.Resize(settings.IMAGE_RESIZE, settings.IMAGE_RESIZE),
-            Augm.RandomCrop(width=settings.IMAGE_SIZE, height=settings.IMAGE_SIZE),
+            Augm.RandomResizedCrop(height=settings.IMAGE_SIZE, width=settings.IMAGE_SIZE, scale=(0.8, 1.0)),
             Augm.HorizontalFlip(p=0.5),
             Augm.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
             ToTensorV2(),
         ]
     )
 
-    strong_transform = Augm.Compose(
-        [
-            Augm.Resize(settings.IMAGE_RESIZE, settings.IMAGE_RESIZE),
-            Augm.RandomCrop(width=settings.IMAGE_SIZE, height=settings.IMAGE_SIZE),
-            Augm.HorizontalFlip(p=0.5),
+    if hasattr(Augm, "RandAugment"):
+        strong_augment = [Augm.RandAugment(num_ops=2, magnitude=9)]
+    elif hasattr(Augm, "TrivialAugmentWide"):
+        strong_augment = [Augm.TrivialAugmentWide()]
+    else:
+        strong_augment = [
             Augm.OneOf(
                 [
                     ColorJitter(),
@@ -222,7 +222,14 @@ def get_transforms() -> DataTransforms:
                     Augm.GaussianBlur(blur_limit=(3, 5)),
                 ],
                 p=0.8,
-            ),
+            )
+        ]
+
+    strong_transform = Augm.Compose(
+        [
+            Augm.RandomResizedCrop(height=settings.IMAGE_SIZE, width=settings.IMAGE_SIZE, scale=(0.6, 1.0)),
+            Augm.HorizontalFlip(p=0.5),
+            *strong_augment,
             Augm.CoarseDropout(p=0.5),
             Augm.RandomBrightnessContrast(p=0.2),
             Augm.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
