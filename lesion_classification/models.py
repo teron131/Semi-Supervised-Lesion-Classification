@@ -157,11 +157,13 @@ def get_resnet50(pre_trained: bool = True, dropout: float | None = 0.5) -> ResNe
 
 
 class MeanTeacherModel(nn.Module):
-    def __init__(self, student_model: nn.Module, ema_decay: float):
+    def __init__(self, student_model: nn.Module, ema_decay: float, consistency_max_weight: float, rampup_epochs: int):
         super().__init__()
         self.student_model = student_model
         self.teacher_model = copy.deepcopy(student_model)
         self.ema_decay = ema_decay
+        self.consistency_max_weight = consistency_max_weight
+        self.rampup_epochs = rampup_epochs
 
         # Teacher model parameters are not trained via backprop
         for param in self.teacher_model.parameters():
@@ -179,10 +181,12 @@ class MeanTeacherModel(nn.Module):
 
     def sigmoid_rampup(self, current_epoch: int) -> float:
         """Consistency weight ramp-up function."""
-        epoch = np.clip(current_epoch, 0.0, 5.0)
-        phase = 1.0 - epoch / 5.0
+        if self.rampup_epochs <= 0:
+            return 1.0
+        epoch = np.clip(current_epoch, 0.0, float(self.rampup_epochs))
+        phase = 1.0 - epoch / float(self.rampup_epochs)
         return float(np.exp(-5.0 * phase * phase))
 
     def get_consistency_weight(self, current_epoch: int) -> float:
         """Get the current consistency loss weight."""
-        return 20.0 * self.sigmoid_rampup(current_epoch)
+        return self.consistency_max_weight * self.sigmoid_rampup(current_epoch)

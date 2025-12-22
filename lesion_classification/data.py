@@ -113,9 +113,17 @@ class AugmentedDataset(Dataset):
 class UnlabeledDataset(Dataset):
     """Dataset class for unlabeled data."""
 
-    def __init__(self, root: str | Path, transform: Augm.Compose | None = None):
+    def __init__(
+        self,
+        root: str | Path,
+        transform: Augm.Compose | None = None,
+        weak_transform: Augm.Compose | None = None,
+        strong_transform: Augm.Compose | None = None,
+    ):
         self.root = Path(root)
         self.transform = transform
+        self.weak_transform = weak_transform
+        self.strong_transform = strong_transform
         self.samples = self._gather_unlabeled_samples(self.root)
 
     def _gather_unlabeled_samples(self, root: Path) -> list[tuple[Path, int]]:
@@ -129,6 +137,10 @@ class UnlabeledDataset(Dataset):
     def __getitem__(self, index: int) -> tuple[torch.Tensor, int]:
         path, target = self.samples[index]
         img = _read_rgb(path)
+        if self.weak_transform is not None and self.strong_transform is not None:
+            weak = self.weak_transform(image=img)["image"]
+            strong = self.strong_transform(image=img)["image"]
+            return weak, strong
         if self.transform is not None:
             img = self.transform(image=img)["image"]
         return img, target
@@ -181,12 +193,41 @@ def get_transforms():
         ]
     )
 
-    return normalization, geo_transform, col_transform, pca_transform
+    weak_transform = Augm.Compose(
+        [
+            Augm.Resize(settings.IMAGE_RESIZE, settings.IMAGE_RESIZE),
+            Augm.RandomCrop(width=settings.IMAGE_SIZE, height=settings.IMAGE_SIZE),
+            Augm.HorizontalFlip(p=0.5),
+            Augm.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            ToTensorV2(),
+        ]
+    )
+
+    strong_transform = Augm.Compose(
+        [
+            Augm.Resize(settings.IMAGE_RESIZE, settings.IMAGE_RESIZE),
+            Augm.RandomCrop(width=settings.IMAGE_SIZE, height=settings.IMAGE_SIZE),
+            Augm.HorizontalFlip(p=0.5),
+            Augm.OneOf(
+                [
+                    ColorJitter(),
+                    FancyPCA(),
+                    Augm.GaussianBlur(blur_limit=(3, 5)),
+                ],
+                p=0.8,
+            ),
+            Augm.RandomBrightnessContrast(p=0.2),
+            Augm.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            ToTensorV2(),
+        ]
+    )
+
+    return normalization, geo_transform, col_transform, pca_transform, weak_transform, strong_transform
 
 
 def get_dataloaders(batch_size: int = 32):
     """Prepare dataloaders for training, unlabeled, and validation sets."""
-    normalization, geo_t, col_t, pca_t = get_transforms()
+    normalization, geo_t, col_t, pca_t, weak_t, strong_t = get_transforms()
 
     # Paths
     benign_dir = settings.TRAIN_DIR / "benign"
@@ -211,10 +252,11 @@ def get_dataloaders(batch_size: int = 32):
     standard_train_dataset = AugmentedDataset(standard_train_filepaths, transform=normalization)
     train_dataset = ConcatDataset([standard_train_dataset, aug_train_dataset])
 
-    unlabeled_dataset = UnlabeledDataset(settings.UNLABELED_DIR, transform=normalization)
-    val_filepaths = sorted((settings.VAL_DIR / "benign").glob("*.jpg")) + sorted(
-        (settings.VAL_DIR / "malignant").glob("*.jpg")
-    )
+    if settings.SSL_METHOD == "fixmatch":
+        unlabeled_dataset = UnlabeledDataset(settings.UNLABELED_DIR, weak_transform=weak_t, strong_transform=strong_t)
+    else:
+        unlabeled_dataset = UnlabeledDataset(settings.UNLABELED_DIR, transform=normalization)
+    val_filepaths = sorted((settings.VAL_DIR / "benign").glob("*.jpg")) + sorted((settings.VAL_DIR / "malignant").glob("*.jpg"))
     val_dataset = AugmentedDataset(val_filepaths, transform=normalization)
 
     generator = torch.Generator().manual_seed(settings.SPLIT_SEED)

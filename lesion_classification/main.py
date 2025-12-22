@@ -1,3 +1,4 @@
+import torch
 from torch import nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -23,11 +24,23 @@ def main():
     # 4. Model
     resnet50 = get_resnet50(pre_trained=settings.PRE_TRAINED, dropout=settings.DROPOUT)
     base_model = ResnetModel(resnet50, settings.NUM_CLASSES)
-    model = MeanTeacherModel(base_model, ema_decay=settings.EMA_DECAY)
+    if settings.SSL_METHOD == "fixmatch":
+        model = base_model
+    else:
+        model = MeanTeacherModel(
+            base_model,
+            ema_decay=settings.EMA_DECAY,
+            consistency_max_weight=settings.CONSISTENCY_MAX_WEIGHT,
+            rampup_epochs=settings.CONSISTENCY_RAMPUP_EPOCHS,
+        )
 
     # 5. Optimizer, Loss, Scheduler
     optimizer = Adam(model.parameters(), lr=settings.LEARNING_RATE, weight_decay=settings.WEIGHT_DECAY)
-    supervised_criterion = BCEFocalLoss(gamma=settings.FOCAL_GAMMA, alpha=settings.FOCAL_ALPHA)
+    if settings.SUPERVISED_LOSS == "bce":
+        pos_weight = torch.tensor([settings.POS_WEIGHT], dtype=torch.float32, device=settings.DEVICE)
+        supervised_criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    else:
+        supervised_criterion = BCEFocalLoss(gamma=settings.FOCAL_GAMMA, alpha=settings.FOCAL_ALPHA)
     consistency_criterion = nn.MSELoss()
 
     scheduler = CosineAnnealingLR(optimizer=optimizer, T_max=settings.EPOCHS)
