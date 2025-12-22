@@ -1,3 +1,4 @@
+from pathlib import Path
 import random
 
 import matplotlib.pyplot as plt
@@ -15,7 +16,21 @@ def set_seed(seed: int = 42):
     torch.backends.cudnn.benchmark = False
 
 
-def plot_history(history: dict[str, list[float]]):
+def save_history(history: dict[str, list[float]], output_dir: Path) -> Path:
+    """Save history metrics to CSV."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    epochs = range(1, len(history["loss_total"]) + 1)
+    csv_path = output_dir / "history.csv"
+    keys = list(history)
+    with csv_path.open("w", encoding="utf-8") as handle:
+        handle.write("epoch," + ",".join(keys) + "\n")
+        for idx, epoch in enumerate(epochs):
+            row = [str(epoch)] + [f"{history[key][idx]:.6f}" for key in keys]
+            handle.write(",".join(row) + "\n")
+    return csv_path
+
+
+def plot_history(history: dict[str, list[float]], output_dir: Path | None = None) -> Path | None:
     """Plot training history (loss, accuracy, AUC)."""
     epochs = range(1, len(history["loss_total"]) + 1)
 
@@ -46,4 +61,11 @@ def plot_history(history: dict[str, list[float]]):
     plt.legend()
 
     plt.tight_layout()
-    plt.show()
+    if output_dir is None:
+        plt.show()
+        return None
+    output_dir.mkdir(parents=True, exist_ok=True)
+    fig_path = output_dir / "training_curves.png"
+    plt.savefig(fig_path, dpi=150)
+    plt.close()
+    return fig_path

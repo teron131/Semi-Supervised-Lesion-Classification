@@ -1,5 +1,6 @@
 import gc
 import itertools
+from pathlib import Path
 
 import numpy as np
 from sklearn.metrics import accuracy_score, average_precision_score, roc_auc_score
@@ -239,7 +240,7 @@ def run_training(
         "val_ap": [],
     }
 
-    best_val_auc = -1.0
+    best_metric = -1.0
     best_state = None
     patience_left = settings.EARLY_STOP_PATIENCE
 
@@ -270,10 +271,25 @@ def run_training(
             f"- Val Pos%: {val_pos_rate * 100:.1f}%"
         )
 
-        if val_auc > best_val_auc:
-            best_val_auc = val_auc
+        metric_value = val_auc if settings.BEST_METRIC == "val_auc" else val_ap
+        if metric_value > best_metric:
+            best_metric = metric_value
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
             patience_left = settings.EARLY_STOP_PATIENCE
+            if settings.SAVE_BEST_CHECKPOINT:
+                checkpoint_dir = Path(settings.CHECKPOINT_DIR)
+                checkpoint_dir.mkdir(parents=True, exist_ok=True)
+                torch.save(
+                    {
+                        "epoch": epoch + 1,
+                        "model_state_dict": best_state,
+                        "val_auc": val_auc,
+                        "val_ap": val_ap,
+                        "val_acc": val_acc,
+                        "best_metric": settings.BEST_METRIC,
+                    },
+                    checkpoint_dir / "best.pt",
+                )
         else:
             patience_left -= 1
             if patience_left <= 0:

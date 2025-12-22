@@ -8,7 +8,7 @@ from .data import get_class_counts, get_dataloaders, prepare_data
 from .losses import BCEFocalLoss
 from .models import MeanTeacherModel, ResnetModel, get_resnet50
 from .trainer import run_training
-from .utils import plot_history, set_seed
+from .utils import plot_history, save_history, set_seed
 
 
 def main():
@@ -76,7 +76,8 @@ def main():
     )
 
     # 7. Visualization
-    plot_history(history)
+    save_history(history, settings.RESULTS_DIR)
+    plot_history(history, settings.RESULTS_DIR)
 
 
 if __name__ == "__main__":

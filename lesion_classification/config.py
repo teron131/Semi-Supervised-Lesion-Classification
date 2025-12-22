@@ -58,6 +58,10 @@ class Settings(BaseSettings):
 
     # Training control
     EARLY_STOP_PATIENCE: int = 5
+    SAVE_BEST_CHECKPOINT: bool = True
+    BEST_METRIC: str = "val_auc"  # "val_auc" or "val_ap"
+    CHECKPOINT_DIR: Path = PROJECT_ROOT / "checkpoints"
+    RESULTS_DIR: Path = PROJECT_ROOT / "results"
 
     # Derived stats (populated at runtime)
     TRAIN_POS_RATIO: float | None = None
