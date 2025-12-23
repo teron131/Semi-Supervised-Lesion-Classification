@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     BATCH_SIZE: int = 32
     EPOCHS: int = 40  # Slightly more epochs for better SSL convergence
     LEARNING_RATE: float = 1e-4  # Lower LR for more stable training
-    WEIGHT_DECAY: float = 1e-2  # Stronger regularization to combat overfitting
+    WEIGHT_DECAY: float = 2e-2  # Stronger regularization to combat overfitting
 
     # Model Settings
     DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
@@ -45,8 +45,8 @@ class Settings(BaseSettings):
 
     # Semi-supervised settings (FixMatch)
     FIXMATCH_TAU: float = 0.80  # Lowered slightly
-    FIXMATCH_TAU_POS: float = 0.65  # Lowered significantly to accept more malignant
-    FIXMATCH_TAU_NEG: float = 0.90
+    FIXMATCH_TAU_POS: float = 0.70  # Increased slightly for better precision
+    FIXMATCH_TAU_NEG: float = 0.95  # Increased for more certain benign labels
     FIXMATCH_USE_ASYMMETRIC_TAU: bool = True
     FIXMATCH_TAU_SCHEDULE: bool = True  # Enable schedule
     FIXMATCH_TAU_START: float = 0.70
@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     MIXUP_PROB: float = 0.5
 
     # Training control
-    EARLY_STOP_PATIENCE: int = 15
+    EARLY_STOP_PATIENCE: int = 20
     SAVE_BEST_CHECKPOINT: bool = True
     BEST_METRIC: str = "val_ap"
     CHECKPOINT_DIR: Path = PROJECT_ROOT / "checkpoints"
