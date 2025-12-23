@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     FIXMATCH_RAMPUP_EPOCHS: int = 5  # Faster rampup
     FIXMATCH_MIN_TAU: float = 0.60
     FIXMATCH_USE_CLASS_THRESHOLDS: bool = False
-    FIXMATCH_DISTRIBUTION_ALIGNMENT: True
+    FIXMATCH_DISTRIBUTION_ALIGNMENT: bool = True
     FIXMATCH_DA_MOMENTUM: float = 0.9
     FIXMATCH_SHARPEN_T: float = 0.5
     FLEXMATCH_ENABLE: bool = True
