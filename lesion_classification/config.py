@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     # Training Hyperparameters
     BATCH_SIZE: int = 32
     EPOCHS: int = 20
-    LEARNING_RATE: float = 1e-5
+    LEARNING_RATE: float = 2e-4
     WEIGHT_DECAY: float = 1e-5
 
     # Model Settings
