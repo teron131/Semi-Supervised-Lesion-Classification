@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     # Training Hyperparameters
     BATCH_SIZE: int = 32
-    EPOCHS: int = 100  # Slightly more epochs for better SSL convergence
+    EPOCHS: int = 60  # Slightly more epochs for better SSL convergence
     LEARNING_RATE: float = 5e-5  # Lower LR for more stable training
     WEIGHT_DECAY: float = 3e-2  # Stronger regularization to combat overfitting
 
@@ -27,9 +27,9 @@ class Settings(BaseSettings):
 
     # Loss Settings
     FOCAL_GAMMA: float = 2.0
-    FOCAL_ALPHA: float = 0.85  # Increased for better malignant weighting (5.6:1)
+    FOCAL_ALPHA: float = 0.75  # Reduced slightly to reduce False Positives
     SUPERVISED_LOSS: str = "focal"
-    POS_WEIGHT: float = 3.0
+    POS_WEIGHT: float = 2.0
     AUTO_POS_WEIGHT: bool = True
     POS_WEIGHT_MAX: float = 10.0
 
@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     FIXMATCH_LAMBDA_U: float = 2.0  # Conservative weight
     FIXMATCH_RAMPUP_EPOCHS: int = 5  # Faster rampup
     FIXMATCH_MIN_TAU: float = 0.60
-    FIXMATCH_USE_CLASS_THRESHOLDS: bool = False
+    FIXMATCH_USE_CLASS_THRESHOLDS: bool = True
     FIXMATCH_DISTRIBUTION_ALIGNMENT: bool = True
     FIXMATCH_DA_MOMENTUM: float = 0.9
     FIXMATCH_SHARPEN_T: float = 0.5
