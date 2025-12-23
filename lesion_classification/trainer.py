@@ -308,7 +308,7 @@ def validate(
     val_loader: DataLoader,
     device: torch.device,
     ema: EMA | None = None,
-) -> tuple[float, float, float, float]:
+) -> tuple[float, float, float, float, float]:
     """Validate the student model."""
     model.eval()
     if ema is not None:
@@ -328,16 +328,20 @@ def validate(
 
     val_labels = np.array(val_labels_list)
     val_preds = np.array(val_preds_list)
+    val_hard_preds = np.round(val_preds)
 
-    acc = accuracy_score(val_labels, np.round(val_preds))
+    acc = accuracy_score(val_labels, val_hard_preds)
     auc = roc_auc_score(val_labels, val_preds) if len(np.unique(val_labels)) > 1 else 0.0
     ap = average_precision_score(val_labels, val_preds) if len(np.unique(val_labels)) > 1 else 0.0
-    pos_rate = float(np.mean(np.round(val_preds))) if len(val_preds) > 0 else 0.0
+    
+    pos_mask = (val_labels > 0.5)
+    sensitivity = float(np.mean(val_hard_preds[pos_mask])) if np.any(pos_mask) else 0.0
+    pos_rate = float(np.mean(val_hard_preds)) if len(val_hard_preds) > 0 else 0.0
 
     if ema is not None:
         ema.restore(model)
 
-    return acc, auc, ap, pos_rate
+    return acc, auc, ap, pos_rate, sensitivity
 
 
 def run_training(
@@ -385,7 +389,7 @@ def run_training(
             model, train_loader, unlabeled_loader, optimizer, supervised_criterion, device, epoch, scaler, ema
         )
 
-        val_acc, val_auc, val_ap, val_pos_rate = validate(model, val_loader, device, ema)
+        val_acc, val_auc, val_ap, val_pos_rate, val_sens = validate(model, val_loader, device, ema)
         scheduler.step()
 
         # Update history
@@ -402,7 +406,7 @@ def run_training(
         print(
             f"Epoch [{epoch + 1:02}/{epochs}] - Loss: {avg_loss:.4f} - Train Acc: {train_acc * 100:.2f}% "
             f"- Val Acc: {val_acc * 100:.2f}% - Val AUC: {val_auc:.4f} - Val AP: {val_ap:.4f} "
-            f"- Val Pos%: {val_pos_rate * 100:.1f}% - Accepted Pos%: {accepted_ratio * 100:.1f}%"
+            f"- Val Pos%: {val_pos_rate * 100:.1f}% - Val Sens: {val_sens * 100:.1f}% - Accepted Pos%: {accepted_ratio * 100:.1f}%"
         )
 
         metric_value = val_auc if settings.BEST_METRIC == "val_auc" else val_ap

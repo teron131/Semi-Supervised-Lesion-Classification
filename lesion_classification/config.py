@@ -27,11 +27,11 @@ class Settings(BaseSettings):
 
     # Loss Settings
     FOCAL_GAMMA: float = 2.0
-    FOCAL_ALPHA: float = 0.80  # Slightly adjusted to be less aggressive than 0.85
-    SUPERVISED_LOSS: str = "focal"  # Try focal loss with corrected alpha
-    POS_WEIGHT: float = 2.5
-    AUTO_POS_WEIGHT: bool = True  # Auto-compute based on class ratio
-    POS_WEIGHT_MAX: float = 4.0  # Allow higher weight for minority class
+    FOCAL_ALPHA: float = 0.85  # Increased for better malignant weighting (5.6:1)
+    SUPERVISED_LOSS: str = "focal"
+    POS_WEIGHT: float = 3.0
+    AUTO_POS_WEIGHT: bool = True
+    POS_WEIGHT_MAX: float = 10.0
 
     # Data settings
     TRAIN_SPLIT_SIZE: int = 270
@@ -44,49 +44,49 @@ class Settings(BaseSettings):
     USE_WEIGHTED_SAMPLER: bool = True
 
     # Semi-supervised settings (FixMatch)
-    FIXMATCH_TAU: float = 0.85  # Lowered from 0.95 to accept more pseudo-labels
-    FIXMATCH_TAU_POS: float = 0.75  # Lower for minority class (malignant)
-    FIXMATCH_TAU_NEG: float = 0.90  # Higher for majority class (benign)
-    FIXMATCH_USE_ASYMMETRIC_TAU: bool = True  # Enable class-specific thresholds
-    FIXMATCH_TAU_SCHEDULE: bool = False
-    FIXMATCH_TAU_START: float = 0.95
+    FIXMATCH_TAU: float = 0.80  # Lowered slightly
+    FIXMATCH_TAU_POS: float = 0.65  # Lowered significantly to accept more malignant
+    FIXMATCH_TAU_NEG: float = 0.90
+    FIXMATCH_USE_ASYMMETRIC_TAU: bool = True
+    FIXMATCH_TAU_SCHEDULE: bool = True  # Enable schedule
+    FIXMATCH_TAU_START: float = 0.70
     FIXMATCH_TAU_END: float = 0.85
-    FIXMATCH_TAU_SCHEDULE_EPOCHS: int = 8
-    FIXMATCH_LAMBDA_U: float = 2.0  # Increased to leverage unlabeled data more
-    FIXMATCH_RAMPUP_EPOCHS: int = 10  # Slower ramp-up for stability
-    FIXMATCH_MIN_TAU: float = 0.75  # Allow lower thresholds for FlexMatch
+    FIXMATCH_TAU_SCHEDULE_EPOCHS: int = 15
+    FIXMATCH_LAMBDA_U: float = 1.0  # Conservative weight
+    FIXMATCH_RAMPUP_EPOCHS: int = 5  # Faster rampup
+    FIXMATCH_MIN_TAU: float = 0.60
     FIXMATCH_USE_CLASS_THRESHOLDS: bool = False
-    FIXMATCH_DISTRIBUTION_ALIGNMENT: bool = True  # Enable to correct class bias
+    FIXMATCH_DISTRIBUTION_ALIGNMENT: True
     FIXMATCH_DA_MOMENTUM: float = 0.9
-    FIXMATCH_SHARPEN_T: float = 0.5  # Sharpen pseudo-labels for harder targets
-    FLEXMATCH_ENABLE: bool = True  # Enable class-adaptive thresholds
-    FLEXMATCH_MOMENTUM: float = 0.9  # Increased for more stable threshold updates
-    SOFT_PSEUDO_LABELS: bool = True  # Weight by confidence above threshold
-    FLEXMATCH_WARMUP_EPOCHS: int = 3  # Earlier FlexMatch activation
-    FLEXMATCH_TAU_MIN: float = 0.75  # Allow thresholds to drop lower
+    FIXMATCH_SHARPEN_T: float = 0.5
+    FLEXMATCH_ENABLE: bool = True
+    FLEXMATCH_MOMENTUM: float = 0.9
+    SOFT_PSEUDO_LABELS: bool = True
+    FLEXMATCH_WARMUP_EPOCHS: int = 3
+    FLEXMATCH_TAU_MIN: float = 0.60
     FIXMATCH_USE_TOPK: bool = False
     FIXMATCH_TOPK_POS: int = 8
     FIXMATCH_TOPK_NEG: int = 16
 
     # MixUp augmentation (creates synthetic samples)
     MIXUP_ENABLE: bool = True
-    MIXUP_ALPHA: float = 0.4  # Beta distribution parameter (higher = more mixing)
-    MIXUP_PROB: float = 0.5  # Probability of applying MixUp per batch
+    MIXUP_ALPHA: float = 0.4
+    MIXUP_PROB: float = 0.5
 
     # Training control
-    EARLY_STOP_PATIENCE: int = 10  # More patience for SSL to fully converge
+    EARLY_STOP_PATIENCE: int = 15
     SAVE_BEST_CHECKPOINT: bool = True
-    BEST_METRIC: str = "val_ap"  # AP is better for imbalanced data
+    BEST_METRIC: str = "val_ap"
     CHECKPOINT_DIR: Path = PROJECT_ROOT / "checkpoints"
     RESULTS_DIR: Path = PROJECT_ROOT / "results"
     WARMUP_EPOCHS: int = 2
     USE_AMP: bool = True
     MAX_GRAD_NORM: float = 1.0
     EMA_ENABLE: bool = True
-    EMA_DECAY: float = 0.999
+    EMA_DECAY: float = 0.99  # Faster adaptation
     FREEZE_BACKBONE_EPOCHS: int = 2
     LR_LAYER_DECAY: float = 0.8
-    INIT_BIAS_FROM_PRIOR: bool = True  # Initialize output bias from class distribution
+    INIT_BIAS_FROM_PRIOR: bool = True
 
     # Derived stats (populated at runtime)
     TRAIN_POS_RATIO: float | None = None
