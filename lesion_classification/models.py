@@ -4,13 +4,21 @@ from torchvision.models import ConvNeXt_Tiny_Weights, convnext_tiny as _convnext
 
 
 class ClassifierModel(nn.Module):
-    def __init__(self, encoder: nn.Module, feature_dim: int, num_classes: int = 1):
+    def __init__(
+        self,
+        encoder: nn.Module,
+        feature_dim: int,
+        num_classes: int = 1,
+        dropout: float = 0.3,
+    ):
         super().__init__()
         self.encoder = encoder
+        self.dropout = nn.Dropout(p=dropout)
         self.classifier = nn.Linear(feature_dim, num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.encoder(x)
+        x = self.dropout(x)
         x = self.classifier(x)
         return x
 

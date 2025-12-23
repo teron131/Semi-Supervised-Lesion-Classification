@@ -16,9 +16,9 @@ class Settings(BaseSettings):
 
     # Training Hyperparameters
     BATCH_SIZE: int = 32
-    EPOCHS: int = 20
-    LEARNING_RATE: float = 2e-4
-    WEIGHT_DECAY: float = 1e-3
+    EPOCHS: int = 30  # More epochs since SSL benefits from longer training
+    LEARNING_RATE: float = 1e-4  # Lower LR for more stable training
+    WEIGHT_DECAY: float = 5e-3  # Stronger regularization to combat overfitting
 
     # Model Settings
     DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
@@ -30,8 +30,8 @@ class Settings(BaseSettings):
     FOCAL_ALPHA: float = 0.6
     SUPERVISED_LOSS: str = "bce"  # "focal" or "bce"
     POS_WEIGHT: float = 2.5
-    AUTO_POS_WEIGHT: bool = False
-    POS_WEIGHT_MAX: float = 3.0
+    AUTO_POS_WEIGHT: bool = True  # Auto-compute based on class ratio
+    POS_WEIGHT_MAX: float = 4.0  # Allow higher weight for minority class
 
     # Data settings
     TRAIN_SPLIT_SIZE: int = 270
@@ -44,34 +44,34 @@ class Settings(BaseSettings):
     USE_WEIGHTED_SAMPLER: bool = False
 
     # Semi-supervised settings (FixMatch)
-    FIXMATCH_TAU: float = 0.95
-    FIXMATCH_TAU_POS: float = 0.95
-    FIXMATCH_TAU_NEG: float = 0.95
-    FIXMATCH_USE_ASYMMETRIC_TAU: bool = False
+    FIXMATCH_TAU: float = 0.85  # Lowered from 0.95 to accept more pseudo-labels
+    FIXMATCH_TAU_POS: float = 0.80  # Lower for minority class (malignant)
+    FIXMATCH_TAU_NEG: float = 0.90  # Higher for majority class (benign)
+    FIXMATCH_USE_ASYMMETRIC_TAU: bool = True  # Enable class-specific thresholds
     FIXMATCH_TAU_SCHEDULE: bool = False
     FIXMATCH_TAU_START: float = 0.95
     FIXMATCH_TAU_END: float = 0.85
     FIXMATCH_TAU_SCHEDULE_EPOCHS: int = 8
-    FIXMATCH_LAMBDA_U: float = 0.3
-    FIXMATCH_RAMPUP_EPOCHS: int = 10
-    FIXMATCH_MIN_TAU: float = 0.85
+    FIXMATCH_LAMBDA_U: float = 1.0  # Increased from 0.3 to leverage unlabeled data
+    FIXMATCH_RAMPUP_EPOCHS: int = 5  # Faster ramp-up (was 10)
+    FIXMATCH_MIN_TAU: float = 0.75  # Allow lower thresholds for FlexMatch
     FIXMATCH_USE_CLASS_THRESHOLDS: bool = False
-    FIXMATCH_DISTRIBUTION_ALIGNMENT: bool = False
+    FIXMATCH_DISTRIBUTION_ALIGNMENT: bool = True  # Enable to correct class bias
     FIXMATCH_DA_MOMENTUM: float = 0.9
-    FIXMATCH_SHARPEN_T: float = 1.0
-    FLEXMATCH_ENABLE: bool = False
-    FLEXMATCH_MOMENTUM: float = 0.7
-    SOFT_PSEUDO_LABELS: bool = False
-    FLEXMATCH_WARMUP_EPOCHS: int = 5
-    FLEXMATCH_TAU_MIN: float = 0.85
+    FIXMATCH_SHARPEN_T: float = 0.5  # Sharpen pseudo-labels for harder targets
+    FLEXMATCH_ENABLE: bool = True  # Enable class-adaptive thresholds
+    FLEXMATCH_MOMENTUM: float = 0.9  # Increased for more stable threshold updates
+    SOFT_PSEUDO_LABELS: bool = True  # Weight by confidence above threshold
+    FLEXMATCH_WARMUP_EPOCHS: int = 3  # Earlier FlexMatch activation
+    FLEXMATCH_TAU_MIN: float = 0.75  # Allow thresholds to drop lower
     FIXMATCH_USE_TOPK: bool = False
     FIXMATCH_TOPK_POS: int = 8
     FIXMATCH_TOPK_NEG: int = 16
 
     # Training control
-    EARLY_STOP_PATIENCE: int = 5
+    EARLY_STOP_PATIENCE: int = 8  # More patience since SSL needs time to converge
     SAVE_BEST_CHECKPOINT: bool = True
-    BEST_METRIC: str = "val_ap"  # "val_auc" or "val_ap"
+    BEST_METRIC: str = "val_ap"  # AP is better for imbalanced data
     CHECKPOINT_DIR: Path = PROJECT_ROOT / "checkpoints"
     RESULTS_DIR: Path = PROJECT_ROOT / "results"
     WARMUP_EPOCHS: int = 2
