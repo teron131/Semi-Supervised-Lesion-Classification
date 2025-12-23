@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     BATCH_SIZE: int = 32
     EPOCHS: int = 20
     LEARNING_RATE: float = 2e-4
-    WEIGHT_DECAY: float = 1e-5
+    WEIGHT_DECAY: float = 1e-3
 
     # Model Settings
     DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
@@ -29,9 +29,9 @@ class Settings(BaseSettings):
     FOCAL_GAMMA: float = 2.0
     FOCAL_ALPHA: float = 0.6
     SUPERVISED_LOSS: str = "bce"  # "focal" or "bce"
-    POS_WEIGHT: float = 3.0
-    AUTO_POS_WEIGHT: bool = True
-    POS_WEIGHT_MAX: float = 2.0
+    POS_WEIGHT: float = 2.5
+    AUTO_POS_WEIGHT: bool = False
+    POS_WEIGHT_MAX: float = 3.0
 
     # Data settings
     TRAIN_SPLIT_SIZE: int = 270
@@ -45,33 +45,33 @@ class Settings(BaseSettings):
 
     # Semi-supervised settings (FixMatch)
     FIXMATCH_TAU: float = 0.95
-    FIXMATCH_TAU_POS: float = 0.9
+    FIXMATCH_TAU_POS: float = 0.95
     FIXMATCH_TAU_NEG: float = 0.95
-    FIXMATCH_USE_ASYMMETRIC_TAU: bool = True
+    FIXMATCH_USE_ASYMMETRIC_TAU: bool = False
     FIXMATCH_TAU_SCHEDULE: bool = False
     FIXMATCH_TAU_START: float = 0.95
     FIXMATCH_TAU_END: float = 0.85
     FIXMATCH_TAU_SCHEDULE_EPOCHS: int = 8
     FIXMATCH_LAMBDA_U: float = 0.3
     FIXMATCH_RAMPUP_EPOCHS: int = 10
-    FIXMATCH_MIN_TAU: float = 0.4
+    FIXMATCH_MIN_TAU: float = 0.85
     FIXMATCH_USE_CLASS_THRESHOLDS: bool = False
-    FIXMATCH_DISTRIBUTION_ALIGNMENT: bool = True
+    FIXMATCH_DISTRIBUTION_ALIGNMENT: bool = False
     FIXMATCH_DA_MOMENTUM: float = 0.9
     FIXMATCH_SHARPEN_T: float = 1.0
     FLEXMATCH_ENABLE: bool = False
     FLEXMATCH_MOMENTUM: float = 0.7
-    SOFT_PSEUDO_LABELS: bool = True
+    SOFT_PSEUDO_LABELS: bool = False
     FLEXMATCH_WARMUP_EPOCHS: int = 5
     FLEXMATCH_TAU_MIN: float = 0.85
-    FIXMATCH_USE_TOPK: bool = True
+    FIXMATCH_USE_TOPK: bool = False
     FIXMATCH_TOPK_POS: int = 8
     FIXMATCH_TOPK_NEG: int = 16
 
     # Training control
     EARLY_STOP_PATIENCE: int = 5
     SAVE_BEST_CHECKPOINT: bool = True
-    BEST_METRIC: str = "val_auc"  # "val_auc" or "val_ap"
+    BEST_METRIC: str = "val_ap"  # "val_auc" or "val_ap"
     CHECKPOINT_DIR: Path = PROJECT_ROOT / "checkpoints"
     RESULTS_DIR: Path = PROJECT_ROOT / "results"
     WARMUP_EPOCHS: int = 2
