@@ -27,7 +27,6 @@
 | Optimization | Standard optimizer setup | AdamW with bias/norm no-decay, layer-wise LR decay, head LR multiplier, warmup + cosine schedule |
 | Stabilization | EMA teacher model | EMA weights for evaluation; AMP + grad clipping |
 | Metrics | Accuracy / AUC (reported) | Accuracy / ROC-AUC / AP (logged each epoch) |
-| Artifacts | Notebook-only logs/plots | `results/history.csv`, `results/training_curves.png`, `checkpoints/best.pt` |
 
 
 ## Original Implementation
