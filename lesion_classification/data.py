@@ -49,6 +49,21 @@ def _label_from_path(image_filepath: str | Path) -> float:
     return 1.0 if parent_dir == "malignant" else 0.0
 
 
+def _copy_images(image_indices: np.ndarray, image_ids: list[str], labels: list[str] | None, src_dir: Path, dst_dir: Path):
+    """Copy images from source to destination directory."""
+    for i in image_indices:
+        name = image_ids[i]
+        src_path = src_dir / f"{name}.jpg"
+        if src_path.exists():
+            if labels is not None:
+                label = labels[i]
+                (dst_dir / label).mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_path, dst_dir / label / f"{name}.jpg")
+            else:
+                dst_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_path, dst_dir / f"{name}.jpg")
+
+
 def prepare_data(data_root: Path):
     """Split raw ISIC data into train, unlabeled, and val folders."""
     ensure_dirs()
@@ -87,23 +102,9 @@ def prepare_data(data_root: Path):
 
     src_data_dir = data_root / "ISBI2016_ISIC_Part3_Training_Data"
 
-    for i in ix_train:
-        name, label = img_lis[i], lbl_lis[i]
-        src_path = src_data_dir / f"{name}.jpg"
-        if src_path.exists():
-            shutil.copy2(src_path, settings.TRAIN_DIR / label / f"{name}.jpg")
-
-    for i in ix_unlabeled:
-        name = img_lis[i]
-        src_path = src_data_dir / f"{name}.jpg"
-        if src_path.exists():
-            shutil.copy2(src_path, settings.UNLABELED_DIR / f"{name}.jpg")
-
-    for i in ix_val:
-        name, label = img_lis[i], lbl_lis[i]
-        src_path = src_data_dir / f"{name}.jpg"
-        if src_path.exists():
-            shutil.copy2(src_path, settings.VAL_DIR / label / f"{name}.jpg")
+    _copy_images(ix_train, img_lis, lbl_lis, src_data_dir, settings.TRAIN_DIR)
+    _copy_images(ix_unlabeled, img_lis, None, src_data_dir, settings.UNLABELED_DIR)
+    _copy_images(ix_val, img_lis, lbl_lis, src_data_dir, settings.VAL_DIR)
 
     print(f"Data split completed: {len(ix_train)} train, {len(ix_unlabeled)} unlabeled, {len(ix_val)} val.")
 
