@@ -14,6 +14,7 @@ from .utils import plot_history, save_history, set_seed
 
 
 def _update_class_ratios() -> tuple[int, int]:
+    """Update class ratios in settings and print statistics."""
     benign_count, malignant_count = get_class_counts(settings.TRAIN_DIR)
     total_count = benign_count + malignant_count
     if total_count > 0:
@@ -29,6 +30,7 @@ def _update_class_ratios() -> tuple[int, int]:
 
 
 def _build_supervised_loss(benign_count: int, malignant_count: int) -> nn.Module:
+    """Build supervised loss function based on configuration."""
     if settings.SUPERVISED_LOSS == "bce":
         pos_weight_value = settings.POS_WEIGHT
         if settings.AUTO_POS_WEIGHT and benign_count > 0 and malignant_count > 0:
@@ -39,6 +41,7 @@ def _build_supervised_loss(benign_count: int, malignant_count: int) -> nn.Module
 
 
 def _build_optimizer(model: ClassifierModel) -> AdamW:
+    """Build optimizer with layer-wise learning rate decay."""
     base_lr = settings.LEARNING_RATE
     decay = settings.LR_LAYER_DECAY
     param_groups = []
@@ -67,30 +70,8 @@ def _build_optimizer(model: ClassifierModel) -> AdamW:
     return AdamW(param_groups, lr=base_lr, weight_decay=settings.WEIGHT_DECAY)
 
 
-def main():
-    # 1. Setup
-    set_seed(42)
-
-    # 2. Data Preparation (if needed)
-    prepare_data(settings.DATA_DIR)
-
-    benign_count, malignant_count = _update_class_ratios()
-
-    # 3. Data Loaders
-    train_loader, unlabeled_loader, val_loader = get_dataloaders(settings.BATCH_SIZE)
-
-    # 4. Model
-    backbone, feature_dim = get_convnext_tiny(pre_trained=settings.PRE_TRAINED)
-    model = ClassifierModel(backbone, feature_dim, settings.NUM_CLASSES)
-    if settings.INIT_BIAS_FROM_PRIOR and malignant_count > 0 and benign_count > 0:
-        prior = malignant_count / (benign_count + malignant_count)
-        bias_value = math.log(prior / (1 - prior))
-        with torch.no_grad():
-            model.classifier.bias.fill_(bias_value)
-
-    # 5. Optimizer, Loss, Scheduler
-    optimizer = _build_optimizer(model)
-    supervised_criterion = _build_supervised_loss(benign_count, malignant_count)
+def _build_scheduler(optimizer: AdamW) -> LambdaLR:
+    """Build learning rate scheduler with warmup and cosine annealing."""
 
     def lr_lambda(epoch: int) -> float:
         if epoch < settings.WARMUP_EPOCHS:
@@ -98,9 +79,35 @@ def main():
         progress = (epoch - settings.WARMUP_EPOCHS) / float(max(1, settings.EPOCHS - settings.WARMUP_EPOCHS))
         return 0.5 * (1.0 + math.cos(math.pi * progress))
 
-    scheduler = LambdaLR(optimizer=optimizer, lr_lambda=lr_lambda)
+    return LambdaLR(optimizer=optimizer, lr_lambda=lr_lambda)
 
-    # 6. Training
+
+def _initialize_model_bias(model: ClassifierModel, benign_count: int, malignant_count: int) -> None:
+    """Initialize classifier bias from class prior."""
+    if not settings.INIT_BIAS_FROM_PRIOR or malignant_count == 0 or benign_count == 0:
+        return
+    prior = malignant_count / (benign_count + malignant_count)
+    bias_value = math.log(prior / (1 - prior))
+    with torch.no_grad():
+        model.classifier.bias.fill_(bias_value)
+
+
+def main():
+    """Main training entry point."""
+    set_seed(42)
+    prepare_data(settings.DATA_DIR)
+
+    benign_count, malignant_count = _update_class_ratios()
+    train_loader, unlabeled_loader, val_loader = get_dataloaders(settings.BATCH_SIZE)
+
+    backbone, feature_dim = get_convnext_tiny(pre_trained=settings.PRE_TRAINED)
+    model = ClassifierModel(backbone, feature_dim, settings.NUM_CLASSES)
+    _initialize_model_bias(model, benign_count, malignant_count)
+
+    optimizer = _build_optimizer(model)
+    supervised_criterion = _build_supervised_loss(benign_count, malignant_count)
+    scheduler = _build_scheduler(optimizer)
+
     model, history = run_training(
         model=model,
         train_loader=train_loader,
@@ -113,7 +120,6 @@ def main():
         epochs=settings.EPOCHS,
     )
 
-    # 7. Visualization
     save_history(history, settings.RESULTS_DIR)
     plot_history(history, settings.RESULTS_DIR)
 

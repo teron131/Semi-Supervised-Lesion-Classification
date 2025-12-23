@@ -12,10 +12,15 @@ import torch
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
 from .config import ensure_dirs, settings
-
-IMAGENET_MEAN = (0.485, 0.456, 0.406)
-IMAGENET_STD = (0.229, 0.224, 0.225)
-IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
+from .constants import (
+    CLASS_BENIGN,
+    CLASS_MALIGNANT,
+    IMAGE_EXTENSIONS,
+    IMAGENET_MEAN,
+    IMAGENET_STD,
+    LABEL_BENIGN,
+    LABEL_MALIGNANT,
+)
 
 
 @dataclass(frozen=True)
@@ -46,7 +51,7 @@ def _list_images(directory: Path) -> list[Path]:
 
 def _label_from_path(image_filepath: str | Path) -> float:
     parent_dir = Path(image_filepath).parent.name
-    return 1.0 if parent_dir == "malignant" else 0.0
+    return LABEL_MALIGNANT if parent_dir == CLASS_MALIGNANT else LABEL_BENIGN
 
 
 def _copy_images(image_indices: np.ndarray, image_ids: list[str], labels: list[str] | None, src_dir: Path, dst_dir: Path):
@@ -69,11 +74,11 @@ def prepare_data(data_root: Path):
     ensure_dirs()
 
     split_dirs = [
-        settings.TRAIN_DIR / "benign",
-        settings.TRAIN_DIR / "malignant",
+        settings.TRAIN_DIR / CLASS_BENIGN,
+        settings.TRAIN_DIR / CLASS_MALIGNANT,
         settings.UNLABELED_DIR,
-        settings.VAL_DIR / "benign",
-        settings.VAL_DIR / "malignant",
+        settings.VAL_DIR / CLASS_BENIGN,
+        settings.VAL_DIR / CLASS_MALIGNANT,
     ]
     if any(_has_images(directory) for directory in split_dirs):
         print("Split directories already contain images. Skipping data split.")
@@ -110,8 +115,8 @@ def prepare_data(data_root: Path):
 
 
 def get_class_counts(train_dir: Path) -> tuple[int, int]:
-    benign = len(_list_images(train_dir / "benign"))
-    malignant = len(_list_images(train_dir / "malignant"))
+    benign = len(_list_images(train_dir / CLASS_BENIGN))
+    malignant = len(_list_images(train_dir / CLASS_MALIGNANT))
     return benign, malignant
 
 
@@ -129,7 +134,6 @@ class AugmentedDataset(Dataset):
         image_filepath = str(self.images_filepaths[idx])
         image = _read_rgb(image_filepath)
 
-        # Label is 1.0 for malignant, 0.0 for benign based on folder name
         label = _label_from_path(image_filepath)
 
         if self.transform is not None:
@@ -157,9 +161,18 @@ class UnlabeledDataset(Dataset):
         return len(self.samples)
 
 
-def get_transforms() -> DataTransforms:
-    """Define data transformations."""
-    normalization = Augm.Compose(
+def _base_transform() -> list:
+    """Base resize and normalization pipeline."""
+    return [
+        Augm.Resize(settings.IMAGE_RESIZE, settings.IMAGE_RESIZE),
+        Augm.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+        ToTensorV2(),
+    ]
+
+
+def _normalization_transform() -> Augm.Compose:
+    """Simple normalization transform for validation."""
+    return Augm.Compose(
         [
             Augm.Resize(settings.IMAGE_RESIZE, settings.IMAGE_RESIZE),
             Augm.CenterCrop(settings.IMAGE_SIZE, settings.IMAGE_SIZE),
@@ -168,47 +181,56 @@ def get_transforms() -> DataTransforms:
         ]
     )
 
-    geo_transform = Augm.Compose(
+
+def _geometric_transform() -> Augm.Compose:
+    """Geometric augmentation transform."""
+    return Augm.Compose(
         [
-            Augm.Resize(settings.IMAGE_RESIZE, settings.IMAGE_RESIZE),
+            *_base_transform()[:-1],  # Resize and normalize, skip ToTensorV2
             Augm.RandomCrop(width=settings.IMAGE_SIZE, height=settings.IMAGE_SIZE),
             Augm.HorizontalFlip(p=0.5),
             Augm.VerticalFlip(p=0.5),
             Augm.Rotate(limit=30, p=0.5),
             Augm.Affine(translate_percent=0.1, scale=(0.9, 1.1), rotate=(-15, 15), p=0.3),
             Augm.RandomBrightnessContrast(p=0.2),
-            Augm.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
             ToTensorV2(),
         ]
     )
 
-    col_transform = Augm.Compose(
+
+def _color_transform() -> Augm.Compose:
+    """Color augmentation transform."""
+    return Augm.Compose(
         [
-            Augm.Resize(settings.IMAGE_RESIZE, settings.IMAGE_RESIZE),
+            *_base_transform()[:-1],
             Augm.RandomCrop(width=settings.IMAGE_SIZE, height=settings.IMAGE_SIZE),
             Augm.HorizontalFlip(p=0.5),
             ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05),
             Augm.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.3),
             Augm.HueSaturationValue(hue_shift_limit=10, sat_shift_limit=20, val_shift_limit=20, p=0.3),
-            Augm.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
             ToTensorV2(),
         ]
     )
 
-    pca_transform = Augm.Compose(
+
+def _pca_transform() -> Augm.Compose:
+    """PCA-based color augmentation transform."""
+    return Augm.Compose(
         [
-            Augm.Resize(settings.IMAGE_RESIZE, settings.IMAGE_RESIZE),
+            *_base_transform()[:-1],
             Augm.RandomCrop(width=settings.IMAGE_SIZE, height=settings.IMAGE_SIZE),
             Augm.HorizontalFlip(p=0.5),
             Augm.VerticalFlip(p=0.3),
             FancyPCA(alpha=0.1),
             Augm.RandomBrightnessContrast(brightness_limit=0.15, contrast_limit=0.15, p=0.3),
-            Augm.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
             ToTensorV2(),
         ]
     )
 
-    weak_transform = Augm.Compose(
+
+def _weak_transform() -> Augm.Compose:
+    """Weak augmentation for FixMatch (labeled and unlabeled weak views)."""
+    return Augm.Compose(
         [
             Augm.RandomResizedCrop(size=(settings.IMAGE_SIZE, settings.IMAGE_SIZE), scale=(0.8, 1.0)),
             Augm.HorizontalFlip(p=0.5),
@@ -218,22 +240,28 @@ def get_transforms() -> DataTransforms:
         ]
     )
 
-    if hasattr(Augm, "RandAugment"):
-        strong_augment = [Augm.RandAugment(num_ops=2, magnitude=7)]
-    elif hasattr(Augm, "TrivialAugmentWide"):
-        strong_augment = [Augm.TrivialAugmentWide()]
-    else:
-        strong_augment = [
-            Augm.OneOf(
-                [
-                    ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.02),
-                    Augm.GaussianBlur(blur_limit=(3, 5)),
-                ],
-                p=0.8,
-            )
-        ]
 
-    strong_transform = Augm.Compose(
+def _get_strong_augment() -> list:
+    """Get strong augmentation component based on available albumentations version."""
+    if hasattr(Augm, "RandAugment"):
+        return [Augm.RandAugment(num_ops=2, magnitude=7)]
+    if hasattr(Augm, "TrivialAugmentWide"):
+        return [Augm.TrivialAugmentWide()]
+    return [
+        Augm.OneOf(
+            [
+                ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.02),
+                Augm.GaussianBlur(blur_limit=(3, 5)),
+            ],
+            p=0.8,
+        )
+    ]
+
+
+def _strong_transform() -> Augm.Compose:
+    """Strong augmentation for FixMatch unlabeled data."""
+    strong_augment = _get_strong_augment()
+    return Augm.Compose(
         [
             Augm.RandomResizedCrop(size=(settings.IMAGE_SIZE, settings.IMAGE_SIZE), scale=(0.5, 1.0)),
             Augm.HorizontalFlip(p=0.5),
@@ -255,14 +283,18 @@ def get_transforms() -> DataTransforms:
         ]
     )
 
+
+def get_transforms() -> DataTransforms:
+    """Define all data transformations."""
+    weak = _weak_transform()
     return DataTransforms(
-        normalize=normalization,
-        geo=geo_transform,
-        color=col_transform,
-        pca=pca_transform,
-        weak=weak_transform,
-        strong=strong_transform,
-        train_labeled=weak_transform,  # FixMatch uses weak for labeled
+        normalize=_normalization_transform(),
+        geo=_geometric_transform(),
+        color=_color_transform(),
+        pca=_pca_transform(),
+        weak=weak,
+        strong=_strong_transform(),
+        train_labeled=weak,
     )
 
 
@@ -271,14 +303,14 @@ def _build_weighted_sampler(train_dataset: Dataset, benign_count: int, malignant
     benign_weight = 1.0 / max(benign_count, 1)
     malignant_weight = 1.0 / max(malignant_count, 1)
 
-    # Iterate through the dataset to assign weights based on labels
     if isinstance(train_dataset, AugmentedDataset):
         for filepath in train_dataset.images_filepaths:
-            label_weights.append(malignant_weight if _label_from_path(filepath) == 1.0 else benign_weight)
+            weight = malignant_weight if _label_from_path(filepath) == LABEL_MALIGNANT else benign_weight
+            label_weights.append(weight)
     else:
-        # Fallback for generic dataset
         for _, label in train_dataset:
-            label_weights.append(malignant_weight if label == 1.0 else benign_weight)
+            weight = malignant_weight if label == LABEL_MALIGNANT else benign_weight
+            label_weights.append(weight)
 
     return WeightedRandomSampler(label_weights, num_samples=len(label_weights), replacement=True)
 
@@ -287,19 +319,16 @@ def get_dataloaders(batch_size: int = 32):
     """Prepare dataloaders for training, unlabeled, and validation sets."""
     transforms = get_transforms()
 
-    # Paths
-    benign_dir = settings.TRAIN_DIR / "benign"
-    malignant_dir = settings.TRAIN_DIR / "malignant"
+    benign_dir = settings.TRAIN_DIR / CLASS_BENIGN
+    malignant_dir = settings.TRAIN_DIR / CLASS_MALIGNANT
 
     benign_filepaths = _list_images(benign_dir)
     malignant_filepaths = _list_images(malignant_dir)
-
-    # Combined filepaths for labeled training
     train_filepaths = [*benign_filepaths, *malignant_filepaths]
     train_dataset = AugmentedDataset(train_filepaths, transform=transforms.train_labeled)
 
     unlabeled_dataset = UnlabeledDataset(settings.UNLABELED_DIR, weak_transform=transforms.weak, strong_transform=transforms.strong)
-    val_filepaths = _list_images(settings.VAL_DIR / "benign") + _list_images(settings.VAL_DIR / "malignant")
+    val_filepaths = _list_images(settings.VAL_DIR / CLASS_BENIGN) + _list_images(settings.VAL_DIR / CLASS_MALIGNANT)
     val_dataset = AugmentedDataset(val_filepaths, transform=transforms.normalize)
 
     generator = torch.Generator().manual_seed(settings.SPLIT_SEED)

@@ -12,6 +12,7 @@ from torch.optim.lr_scheduler import _LRScheduler
 from torch.utils.data import DataLoader
 
 from .config import settings
+from .constants import DA_PROB_MAX, DA_PROB_MIN, EPSILON, EPSILON_8, RAMPUP_EXPONENT
 
 
 class EMA:
@@ -40,11 +41,12 @@ class EMA:
 
 
 def _rampup_weight(current_epoch: int, rampup_epochs: int) -> float:
+    """Compute rampup weight for unsupervised loss."""
     if rampup_epochs <= 0:
         return 1.0
     epoch = min(float(current_epoch), float(rampup_epochs))
     phase = 1.0 - epoch / float(rampup_epochs)
-    return float(np.exp(-5.0 * phase * phase))
+    return float(np.exp(-RAMPUP_EXPONENT * phase * phase))
 
 
 def _apply_distribution_alignment(
@@ -53,7 +55,8 @@ def _apply_distribution_alignment(
     target_pos: float,
     momentum: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    batch_pos = probs.mean().clamp(1e-6, 1 - 1e-6)
+    """Apply distribution alignment to match target class distribution."""
+    batch_pos = probs.mean().clamp(DA_PROB_MIN, DA_PROB_MAX)
     ema_pos = batch_pos if ema_pos is None else momentum * ema_pos + (1 - momentum) * batch_pos
     target_pos_tensor = torch.tensor(target_pos, device=probs.device)
     scale_pos = target_pos_tensor / ema_pos
@@ -70,7 +73,13 @@ def _sharpen_probs(probs: torch.Tensor, temperature: float) -> torch.Tensor:
     return sharpened / (sharpened + (1 - probs).pow(1.0 / temperature))
 
 
-def _class_ratio_thresholds(pseudo_labels: torch.Tensor, base_tau: float, min_tau: float, pos_ratio: float, neg_ratio: float) -> torch.Tensor:
+def _class_ratio_thresholds(
+    pseudo_labels: torch.Tensor,
+    base_tau: float,
+    min_tau: float,
+    pos_ratio: float,
+    neg_ratio: float,
+) -> torch.Tensor:
     max_ratio = max(pos_ratio, neg_ratio)
     tau_pos = max(min_tau, base_tau * (pos_ratio / max_ratio))
     tau_neg = max(min_tau, base_tau * (neg_ratio / max_ratio))
@@ -139,13 +148,14 @@ def _flexmatch_thresholds(
     ema_total: torch.Tensor,
     base_tau: float,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Compute FlexMatch adaptive thresholds based on class selection ratios."""
     batch_pos = (pseudo_labels > 0.5).float()
     batch_neg = 1.0 - batch_pos
     ema_total = settings.FLEXMATCH_MOMENTUM * ema_total + (1 - settings.FLEXMATCH_MOMENTUM) * torch.stack([batch_neg.mean(), batch_pos.mean()])
     select_mask = (confidence >= base_tau).float()
     ema_select = settings.FLEXMATCH_MOMENTUM * ema_select + (1 - settings.FLEXMATCH_MOMENTUM) * torch.stack([(select_mask * batch_neg).mean(), (select_mask * batch_pos).mean()])
     class_ratio = ema_select / ema_total
-    max_ratio = class_ratio.max().clamp(min=1e-6)
+    max_ratio = class_ratio.max().clamp(min=EPSILON)
     tau_neg = max(settings.FLEXMATCH_TAU_MIN, float(base_tau * (class_ratio[0] / max_ratio)))
     tau_pos = max(settings.FLEXMATCH_TAU_MIN, float(base_tau * (class_ratio[1] / max_ratio)))
     thresholds = torch.where(
@@ -162,21 +172,60 @@ def _compute_supervised_loss(
     images: torch.Tensor,
     targets: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    # Apply MixUp augmentation to labeled data
+    """Compute supervised loss with optional MixUp augmentation."""
     use_mixup = settings.MIXUP_ENABLE and np.random.rand() < settings.MIXUP_PROB
-    if use_mixup:
-        mixed_imgs, labels_a, labels_b, lam = _mixup_data(images, targets, settings.MIXUP_ALPHA)
-        labeled_logits = model(mixed_imgs)
-        supervised_loss = _mixup_criterion(criterion, labeled_logits, labels_a, labels_b, lam)
-        # For metrics, use original images
-        with torch.no_grad():
-            orig_logits = model(images)
-            labeled_probs = torch.sigmoid(orig_logits)
-    else:
+    if not use_mixup:
         labeled_logits = model(images)
         supervised_loss = criterion(labeled_logits, targets)
         labeled_probs = torch.sigmoid(labeled_logits)
+        return supervised_loss, labeled_probs
+
+    mixed_imgs, labels_a, labels_b, lam = _mixup_data(images, targets, settings.MIXUP_ALPHA)
+    labeled_logits = model(mixed_imgs)
+    supervised_loss = _mixup_criterion(criterion, labeled_logits, labels_a, labels_b, lam)
+    with torch.no_grad():
+        orig_logits = model(images)
+        labeled_probs = torch.sigmoid(orig_logits)
     return supervised_loss, labeled_probs
+
+
+def _get_base_threshold(epoch: int) -> float:
+    """Get base threshold with optional scheduling."""
+    if not settings.FIXMATCH_TAU_SCHEDULE:
+        return settings.FIXMATCH_TAU
+    progress = min(epoch / max(1, settings.FIXMATCH_TAU_SCHEDULE_EPOCHS), 1.0)
+    return settings.FIXMATCH_TAU_START + (settings.FIXMATCH_TAU_END - settings.FIXMATCH_TAU_START) * progress
+
+
+def _get_thresholds(
+    confidence: torch.Tensor,
+    pseudo_labels: torch.Tensor,
+    base_tau: float,
+    epoch: int,
+    ema_select: torch.Tensor,
+    ema_total: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Get thresholds based on configured strategy."""
+    use_flexmatch = settings.FLEXMATCH_ENABLE and epoch >= settings.FLEXMATCH_WARMUP_EPOCHS
+    if use_flexmatch:
+        return _flexmatch_thresholds(confidence, pseudo_labels, ema_select, ema_total, base_tau)
+
+    if settings.FIXMATCH_USE_ASYMMETRIC_TAU:
+        thresholds = _asymmetric_thresholds(pseudo_labels, base_tau)
+        return thresholds, ema_select, ema_total
+
+    if settings.FIXMATCH_USE_CLASS_THRESHOLDS and settings.TRAIN_POS_RATIO is not None and settings.TRAIN_NEG_RATIO is not None:
+        thresholds = _class_ratio_thresholds(
+            pseudo_labels,
+            base_tau,
+            settings.FIXMATCH_MIN_TAU,
+            settings.TRAIN_POS_RATIO,
+            settings.TRAIN_NEG_RATIO,
+        )
+        return thresholds, ema_select, ema_total
+
+    thresholds = torch.full_like(confidence, base_tau)
+    return thresholds, ema_select, ema_total
 
 
 def _compute_unsupervised_loss(
@@ -188,6 +237,7 @@ def _compute_unsupervised_loss(
     ema_select: torch.Tensor,
     ema_total: torch.Tensor,
 ) -> tuple[torch.Tensor, float, float, float, torch.Tensor | None, torch.Tensor, torch.Tensor]:
+    """Compute unsupervised loss using FixMatch-style pseudo-labeling."""
     with torch.no_grad():
         weak_logits = model(weak_imgs)
         weak_probs = torch.sigmoid(weak_logits)
@@ -201,44 +251,36 @@ def _compute_unsupervised_loss(
         )
 
     weak_probs = _sharpen_probs(weak_probs, settings.FIXMATCH_SHARPEN_T)
-
     confidence = torch.maximum(weak_probs, 1 - weak_probs)
     pseudo_labels = (weak_probs >= 0.5).float()
-    if settings.FIXMATCH_TAU_SCHEDULE:
-        base_tau = settings.FIXMATCH_TAU_START + (settings.FIXMATCH_TAU_END - settings.FIXMATCH_TAU_START) * min(epoch / max(1, settings.FIXMATCH_TAU_SCHEDULE_EPOCHS), 1.0)
-    else:
-        base_tau = settings.FIXMATCH_TAU
-    use_flexmatch = settings.FLEXMATCH_ENABLE and epoch >= settings.FLEXMATCH_WARMUP_EPOCHS
-    if use_flexmatch:
-        thresholds, ema_select, ema_total = _flexmatch_thresholds(confidence, pseudo_labels, ema_select, ema_total, base_tau)
-    elif settings.FIXMATCH_USE_ASYMMETRIC_TAU:
-        thresholds = _asymmetric_thresholds(pseudo_labels, base_tau)
-    elif settings.FIXMATCH_USE_CLASS_THRESHOLDS and settings.TRAIN_POS_RATIO is not None and settings.TRAIN_NEG_RATIO is not None:
-        thresholds = _class_ratio_thresholds(
-            pseudo_labels,
-            base_tau,
-            settings.FIXMATCH_MIN_TAU,
-            settings.TRAIN_POS_RATIO,
-            settings.TRAIN_NEG_RATIO,
-        )
-    else:
-        thresholds = torch.full_like(confidence, base_tau)
+
+    base_tau = _get_base_threshold(epoch)
+    thresholds, ema_select, ema_total = _get_thresholds(confidence, pseudo_labels, base_tau, epoch, ema_select, ema_total)
 
     strong_logits = model(strong_imgs)
     unsup_loss_all = F.binary_cross_entropy_with_logits(strong_logits, pseudo_labels, reduction="none")
     mask = _topk_mask(confidence, pseudo_labels) if settings.FIXMATCH_USE_TOPK else (confidence >= thresholds).float()
+
     if settings.SOFT_PSEUDO_LABELS:
-        denom = (1 - thresholds).clamp_min(1e-6)
+        denom = (1 - thresholds).clamp_min(EPSILON)
         weights = ((confidence - thresholds) / denom).clamp(0, 1)
-        unsup_loss = (unsup_loss_all * weights).sum() / (weights.sum() + 1e-8)
+        unsup_loss = (unsup_loss_all * weights).sum() / (weights.sum() + EPSILON_8)
     else:
-        unsup_loss = (unsup_loss_all * mask).sum() / (mask.sum() + 1e-8)
-    
+        unsup_loss = (unsup_loss_all * mask).sum() / (mask.sum() + EPSILON_8)
+
     accepted_total = float(mask.sum().item())
     accepted_pos = float((mask * pseudo_labels).sum().item())
     accepted_neg = float((mask * (1 - pseudo_labels)).sum().item())
 
-    return unsup_loss, accepted_total, accepted_pos, accepted_neg, ema_pos, ema_select, ema_total
+    return (
+        unsup_loss,
+        accepted_total,
+        accepted_pos,
+        accepted_neg,
+        ema_pos,
+        ema_select,
+        ema_total,
+    )
 
 
 def train_one_epoch_fixmatch(
@@ -261,13 +303,8 @@ def train_one_epoch_fixmatch(
     labeled_preds_list = []
     labeled_labels_list = []
     ema_pos = None
-    if settings.FLEXMATCH_ENABLE:
-        ema_select = torch.tensor([0.0, 0.0], device=device)
-        ema_total = torch.tensor([1e-6, 1e-6], device=device)
-    else:
-        # Dummy values for type safety when flexmatch is disabled
-        ema_select = torch.tensor([0.0, 0.0], device=device)
-        ema_total = torch.tensor([1e-6, 1e-6], device=device)
+    ema_select = torch.tensor([0.0, 0.0], device=device)
+    ema_total = torch.tensor([EPSILON, EPSILON], device=device)
 
     unlabeled_iter = itertools.cycle(unlabeled_loader)
     accepted_pos = 0.0
@@ -291,9 +328,7 @@ def train_one_epoch_fixmatch(
 
         optimizer.zero_grad()
         with torch.amp.autocast(device_type="cuda", enabled=settings.USE_AMP and device.type == "cuda"):
-            supervised_loss, labeled_probs = _compute_supervised_loss(
-                model, supervised_criterion, labeled_imgs, labeled_targets
-            )
+            supervised_loss, labeled_probs = _compute_supervised_loss(model, supervised_criterion, labeled_imgs, labeled_targets)
             labeled_preds_list.extend(labeled_probs.detach().cpu().numpy())
             labeled_labels_list.extend(labeled_targets.detach().cpu().numpy())
 
@@ -334,8 +369,18 @@ def train_one_epoch_fixmatch(
     labeled_labels = np.array(labeled_labels_list)
     labeled_preds = np.array(labeled_preds_list)
     acc = accuracy_score(labeled_labels, np.round(labeled_preds))
-    auc = roc_auc_score(labeled_labels, labeled_preds) if len(np.unique(labeled_labels)) > 1 else 0.0
-    return avg_loss, avg_sup_loss, avg_unsup_loss, acc, auc, accepted_total, accepted_pos, accepted_neg
+    has_multiple_classes = len(np.unique(labeled_labels)) > 1
+    auc = roc_auc_score(labeled_labels, labeled_preds) if has_multiple_classes else 0.0
+    return (
+        avg_loss,
+        avg_sup_loss,
+        avg_unsup_loss,
+        acc,
+        auc,
+        accepted_total,
+        accepted_pos,
+        accepted_neg,
+    )
 
 
 @torch.no_grad()
@@ -366,11 +411,12 @@ def validate(
     val_preds = np.array(val_preds_list)
     val_hard_preds = np.round(val_preds)
 
+    has_multiple_classes = len(np.unique(val_labels)) > 1
     acc = accuracy_score(val_labels, val_hard_preds)
-    auc = roc_auc_score(val_labels, val_preds) if len(np.unique(val_labels)) > 1 else 0.0
-    ap = average_precision_score(val_labels, val_preds) if len(np.unique(val_labels)) > 1 else 0.0
-    
-    pos_mask = (val_labels > 0.5)
+    auc = roc_auc_score(val_labels, val_preds) if has_multiple_classes else 0.0
+    ap = average_precision_score(val_labels, val_preds) if has_multiple_classes else 0.0
+
+    pos_mask = val_labels > 0.5
     sensitivity = float(np.mean(val_hard_preds[pos_mask])) if np.any(pos_mask) else 0.0
     pos_rate = float(np.mean(val_hard_preds)) if len(val_hard_preds) > 0 else 0.0
 
@@ -421,8 +467,25 @@ def run_training(
         elif epoch == settings.FREEZE_BACKBONE_EPOCHS:
             for param in model.encoder.parameters():
                 param.requires_grad = True
-        avg_loss, sup_loss, unsup_loss, train_acc, train_auc, accepted_total, accepted_pos, _ = train_one_epoch_fixmatch(
-            model, train_loader, unlabeled_loader, optimizer, supervised_criterion, device, epoch, scaler, ema
+        (
+            avg_loss,
+            sup_loss,
+            unsup_loss,
+            train_acc,
+            train_auc,
+            accepted_total,
+            accepted_pos,
+            _,
+        ) = train_one_epoch_fixmatch(
+            model,
+            train_loader,
+            unlabeled_loader,
+            optimizer,
+            supervised_criterion,
+            device,
+            epoch,
+            scaler,
+            ema,
         )
 
         val_acc, val_auc, val_ap, val_pos_rate, val_sens = validate(model, val_loader, device, ema)
@@ -446,38 +509,39 @@ def run_training(
         )
 
         metric_value = val_auc if settings.BEST_METRIC == "val_auc" else val_ap
-        if metric_value > best_metric:
-            best_metric = metric_value
-            if ema is not None:
-                best_state = {}
-                for name, tensor in model.state_dict().items():
-                    if name in ema.shadow:
-                        best_state[name] = ema.shadow[name].detach().cpu().clone()
-                    else:
-                        best_state[name] = tensor.detach().cpu().clone()
-            else:
-                best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
-            patience_left = settings.EARLY_STOP_PATIENCE
-            if settings.SAVE_BEST_CHECKPOINT:
-                checkpoint_dir = Path(settings.CHECKPOINT_DIR)
-                checkpoint_dir.mkdir(parents=True, exist_ok=True)
-                torch.save(
-                    {
-                        "epoch": epoch + 1,
-                        "model_state_dict": best_state,
-                        "val_auc": val_auc,
-                        "val_ap": val_ap,
-                        "val_acc": val_acc,
-                        "best_metric": settings.BEST_METRIC,
-                        "ema_enabled": settings.EMA_ENABLE,
-                    },
-                    checkpoint_dir / "best.pt",
-                )
-        else:
+        if metric_value <= best_metric:
             patience_left -= 1
             if patience_left <= 0:
                 print("Early stopping triggered.")
                 break
+            continue
+
+        best_metric = metric_value
+        if ema is not None:
+            best_state = {}
+            for name, tensor in model.state_dict().items():
+                if name in ema.shadow:
+                    best_state[name] = ema.shadow[name].detach().cpu().clone()
+                else:
+                    best_state[name] = tensor.detach().cpu().clone()
+        else:
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+        patience_left = settings.EARLY_STOP_PATIENCE
+        if settings.SAVE_BEST_CHECKPOINT:
+            checkpoint_dir = Path(settings.CHECKPOINT_DIR)
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            torch.save(
+                {
+                    "epoch": epoch + 1,
+                    "model_state_dict": best_state,
+                    "val_auc": val_auc,
+                    "val_ap": val_ap,
+                    "val_acc": val_acc,
+                    "best_metric": settings.BEST_METRIC,
+                    "ema_enabled": settings.EMA_ENABLE,
+                },
+                checkpoint_dir / "best.pt",
+            )
 
         # Cleanup
         if torch.cuda.is_available():
