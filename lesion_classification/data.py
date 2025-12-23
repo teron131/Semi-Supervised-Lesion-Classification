@@ -246,7 +246,7 @@ def get_transforms() -> DataTransforms:
                 ],
                 p=0.3,
             ),
-            Augm.CoarseDropout(max_holes=8, max_height=32, max_width=32, p=0.5),
+            Augm.CoarseDropout(num_holes_range=(1, 8), hole_height_range=(1, 32), hole_width_range=(1, 32), p=0.5),
             Augm.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.3),
             Augm.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
             ToTensorV2(),
