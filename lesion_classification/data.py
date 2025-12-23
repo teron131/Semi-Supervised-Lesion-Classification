@@ -171,8 +171,11 @@ def get_transforms() -> DataTransforms:
         [
             Augm.Resize(settings.IMAGE_RESIZE, settings.IMAGE_RESIZE),
             Augm.RandomCrop(width=settings.IMAGE_SIZE, height=settings.IMAGE_SIZE),
-            Augm.HorizontalFlip(p=1),
-            Augm.RandomBrightnessContrast(p=0.1),
+            Augm.HorizontalFlip(p=0.5),
+            Augm.VerticalFlip(p=0.5),
+            Augm.Rotate(limit=30, p=0.5),
+            Augm.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.1, rotate_limit=15, p=0.3),
+            Augm.RandomBrightnessContrast(p=0.2),
             Augm.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
             ToTensorV2(),
         ]
@@ -182,8 +185,10 @@ def get_transforms() -> DataTransforms:
         [
             Augm.Resize(settings.IMAGE_RESIZE, settings.IMAGE_RESIZE),
             Augm.RandomCrop(width=settings.IMAGE_SIZE, height=settings.IMAGE_SIZE),
-            ColorJitter(),
-            Augm.RandomBrightnessContrast(p=0.1),
+            Augm.HorizontalFlip(p=0.5),
+            ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05),
+            Augm.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.3),
+            Augm.HueSaturationValue(hue_shift_limit=10, sat_shift_limit=20, val_shift_limit=20, p=0.3),
             Augm.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
             ToTensorV2(),
         ]
@@ -193,8 +198,10 @@ def get_transforms() -> DataTransforms:
         [
             Augm.Resize(settings.IMAGE_RESIZE, settings.IMAGE_RESIZE),
             Augm.RandomCrop(width=settings.IMAGE_SIZE, height=settings.IMAGE_SIZE),
-            FancyPCA(),
-            Augm.RandomBrightnessContrast(p=0.1),
+            Augm.HorizontalFlip(p=0.5),
+            Augm.VerticalFlip(p=0.3),
+            FancyPCA(alpha=0.1),
+            Augm.RandomBrightnessContrast(brightness_limit=0.15, contrast_limit=0.15, p=0.3),
             Augm.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
             ToTensorV2(),
         ]
@@ -226,11 +233,21 @@ def get_transforms() -> DataTransforms:
 
     strong_transform = Augm.Compose(
         [
-            Augm.RandomResizedCrop(size=(settings.IMAGE_SIZE, settings.IMAGE_SIZE), scale=(0.6, 1.0)),
+            Augm.RandomResizedCrop(size=(settings.IMAGE_SIZE, settings.IMAGE_SIZE), scale=(0.5, 1.0)),
             Augm.HorizontalFlip(p=0.5),
+            Augm.VerticalFlip(p=0.5),
+            Augm.Rotate(limit=45, p=0.5),
             *strong_augment,
-            Augm.CoarseDropout(p=0.4),
-            Augm.RandomBrightnessContrast(p=0.1),
+            Augm.OneOf(
+                [
+                    Augm.GridDistortion(num_steps=5, distort_limit=0.3, p=1.0),
+                    Augm.ElasticTransform(alpha=1, sigma=50, p=1.0),
+                    Augm.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.2, rotate_limit=20, p=1.0),
+                ],
+                p=0.3,
+            ),
+            Augm.CoarseDropout(max_holes=8, max_height=32, max_width=32, p=0.5),
+            Augm.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.3),
             Augm.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
             ToTensorV2(),
         ]

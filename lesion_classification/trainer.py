@@ -105,6 +105,33 @@ def _topk_mask(confidence: torch.Tensor, pseudo_labels: torch.Tensor) -> torch.T
     return mask.clamp(max=1.0)
 
 
+def _mixup_data(
+    images: torch.Tensor,
+    labels: torch.Tensor,
+    alpha: float = 0.4,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
+    """Apply MixUp augmentation to create synthetic samples."""
+    lam = np.random.beta(alpha, alpha) if alpha > 0 else 1.0
+
+    batch_size = images.size(0)
+    index = torch.randperm(batch_size, device=images.device)
+
+    mixed_images = lam * images + (1 - lam) * images[index]
+    labels_a, labels_b = labels, labels[index]
+    return mixed_images, labels_a, labels_b, lam
+
+
+def _mixup_criterion(
+    criterion: nn.Module,
+    logits: torch.Tensor,
+    labels_a: torch.Tensor,
+    labels_b: torch.Tensor,
+    lam: float,
+) -> torch.Tensor:
+    """Compute loss for MixUp samples."""
+    return lam * criterion(logits, labels_a) + (1 - lam) * criterion(logits, labels_b)
+
+
 def _flexmatch_thresholds(
     confidence: torch.Tensor,
     pseudo_labels: torch.Tensor,
@@ -168,9 +195,20 @@ def train_one_epoch_fixmatch(
 
         optimizer.zero_grad()
         with torch.amp.autocast(device_type="cuda", enabled=settings.USE_AMP and device.type == "cuda"):
-            labeled_logits = model(labeled_imgs)
-            supervised_loss = supervised_criterion(labeled_logits, labeled_targets)
-            labeled_probs = torch.sigmoid(labeled_logits)
+            # Apply MixUp augmentation to labeled data
+            use_mixup = settings.MIXUP_ENABLE and np.random.rand() < settings.MIXUP_PROB
+            if use_mixup:
+                mixed_imgs, labels_a, labels_b, lam = _mixup_data(labeled_imgs, labeled_targets, settings.MIXUP_ALPHA)
+                labeled_logits = model(mixed_imgs)
+                supervised_loss = _mixup_criterion(supervised_criterion, labeled_logits, labels_a, labels_b, lam)
+                # For metrics, use original images
+                with torch.no_grad():
+                    orig_logits = model(labeled_imgs)
+                    labeled_probs = torch.sigmoid(orig_logits)
+            else:
+                labeled_logits = model(labeled_imgs)
+                supervised_loss = supervised_criterion(labeled_logits, labeled_targets)
+                labeled_probs = torch.sigmoid(labeled_logits)
             labeled_preds_list.extend(labeled_probs.detach().cpu().numpy())
             labeled_labels_list.extend(labeled_targets.detach().cpu().numpy())
 
@@ -336,7 +374,7 @@ def run_training(
         elif epoch == settings.FREEZE_BACKBONE_EPOCHS:
             for param in model.encoder.parameters():
                 param.requires_grad = True
-        avg_loss, sup_loss, unsup_loss, train_acc, train_auc, accepted_total, accepted_pos, accepted_neg = train_one_epoch_fixmatch(
+        avg_loss, sup_loss, unsup_loss, train_acc, train_auc, accepted_total, accepted_pos, _ = train_one_epoch_fixmatch(
             model, train_loader, unlabeled_loader, optimizer, supervised_criterion, device, epoch, scaler, ema
         )
 

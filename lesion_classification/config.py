@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     # Loss Settings
     FOCAL_GAMMA: float = 2.0
     FOCAL_ALPHA: float = 0.6
-    SUPERVISED_LOSS: str = "bce"  # "focal" or "bce"
+    SUPERVISED_LOSS: str = "focal"  # Focal loss for hard example mining
     POS_WEIGHT: float = 2.5
     AUTO_POS_WEIGHT: bool = True  # Auto-compute based on class ratio
     POS_WEIGHT_MAX: float = 4.0  # Allow higher weight for minority class
@@ -67,6 +67,11 @@ class Settings(BaseSettings):
     FIXMATCH_USE_TOPK: bool = False
     FIXMATCH_TOPK_POS: int = 8
     FIXMATCH_TOPK_NEG: int = 16
+
+    # MixUp augmentation (creates synthetic samples)
+    MIXUP_ENABLE: bool = True
+    MIXUP_ALPHA: float = 0.4  # Beta distribution parameter (higher = more mixing)
+    MIXUP_PROB: float = 0.5  # Probability of applying MixUp per batch
 
     # Training control
     EARLY_STOP_PATIENCE: int = 8  # More patience since SSL needs time to converge
