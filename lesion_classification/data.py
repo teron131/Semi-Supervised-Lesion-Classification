@@ -284,6 +284,21 @@ def _strong_transform() -> Augm.Compose:
     )
 
 
+def _labeled_transform() -> Augm.Compose:
+    """Medium augmentation for labeled data to reduce overfitting."""
+    return Augm.Compose(
+        [
+            Augm.RandomResizedCrop(size=(settings.IMAGE_SIZE, settings.IMAGE_SIZE), scale=(0.7, 1.0)),
+            Augm.HorizontalFlip(p=0.5),
+            Augm.VerticalFlip(p=0.5),
+            Augm.Rotate(limit=30, p=0.5),
+            Augm.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05, p=0.5),
+            Augm.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            ToTensorV2(),
+        ]
+    )
+
+
 def get_transforms() -> DataTransforms:
     """Define all data transformations."""
     weak = _weak_transform()
@@ -294,7 +309,7 @@ def get_transforms() -> DataTransforms:
         pca=_pca_transform(),
         weak=weak,
         strong=_strong_transform(),
-        train_labeled=weak,
+        train_labeled=_labeled_transform(),
     )
 
 

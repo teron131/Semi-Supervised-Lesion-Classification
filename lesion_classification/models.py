@@ -9,7 +9,7 @@ class ClassifierModel(nn.Module):
         encoder: nn.Module,
         feature_dim: int,
         num_classes: int = 1,
-        dropout: float = 0.3,
+        dropout: float = 0.5,
     ):
         super().__init__()
         self.encoder = encoder

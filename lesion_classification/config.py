@@ -16,9 +16,9 @@ class Settings(BaseSettings):
 
     # Training Hyperparameters
     BATCH_SIZE: int = 32
-    EPOCHS: int = 40  # Slightly more epochs for better SSL convergence
-    LEARNING_RATE: float = 1e-4  # Lower LR for more stable training
-    WEIGHT_DECAY: float = 2e-2  # Stronger regularization to combat overfitting
+    EPOCHS: int = 100  # Slightly more epochs for better SSL convergence
+    LEARNING_RATE: float = 5e-5  # Lower LR for more stable training
+    WEIGHT_DECAY: float = 3e-2  # Stronger regularization to combat overfitting
 
     # Model Settings
     DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     FIXMATCH_TAU_START: float = 0.70
     FIXMATCH_TAU_END: float = 0.85
     FIXMATCH_TAU_SCHEDULE_EPOCHS: int = 15
-    FIXMATCH_LAMBDA_U: float = 1.0  # Conservative weight
+    FIXMATCH_LAMBDA_U: float = 2.0  # Conservative weight
     FIXMATCH_RAMPUP_EPOCHS: int = 5  # Faster rampup
     FIXMATCH_MIN_TAU: float = 0.60
     FIXMATCH_USE_CLASS_THRESHOLDS: bool = False
@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     MAX_GRAD_NORM: float = 1.0
     EMA_ENABLE: bool = True
     EMA_DECAY: float = 0.99  # Faster adaptation
-    FREEZE_BACKBONE_EPOCHS: int = 2
+    FREEZE_BACKBONE_EPOCHS: int = 5
     LR_LAYER_DECAY: float = 0.8
     INIT_BIAS_FROM_PRIOR: bool = True
 
