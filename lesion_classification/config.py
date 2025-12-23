@@ -44,27 +44,27 @@ class Settings(BaseSettings):
     USE_WEIGHTED_SAMPLER: bool = False
 
     # Semi-supervised settings (FixMatch)
-    FIXMATCH_TAU: float = 0.85
-    FIXMATCH_TAU_POS: float = 0.8
-    FIXMATCH_TAU_NEG: float = 0.9
-    FIXMATCH_USE_ASYMMETRIC_TAU: bool = True
-    FIXMATCH_TAU_SCHEDULE: bool = True
+    FIXMATCH_TAU: float = 0.95
+    FIXMATCH_TAU_POS: float = 0.95
+    FIXMATCH_TAU_NEG: float = 0.95
+    FIXMATCH_USE_ASYMMETRIC_TAU: bool = False
+    FIXMATCH_TAU_SCHEDULE: bool = False
     FIXMATCH_TAU_START: float = 0.95
     FIXMATCH_TAU_END: float = 0.85
     FIXMATCH_TAU_SCHEDULE_EPOCHS: int = 8
-    FIXMATCH_LAMBDA_U: float = 0.5
+    FIXMATCH_LAMBDA_U: float = 0.3
     FIXMATCH_RAMPUP_EPOCHS: int = 10
     FIXMATCH_MIN_TAU: float = 0.4
-    FIXMATCH_USE_CLASS_THRESHOLDS: bool = True
+    FIXMATCH_USE_CLASS_THRESHOLDS: bool = False
     FIXMATCH_DISTRIBUTION_ALIGNMENT: bool = True
     FIXMATCH_DA_MOMENTUM: float = 0.9
     FIXMATCH_SHARPEN_T: float = 1.0
-    FLEXMATCH_ENABLE: bool = True
+    FLEXMATCH_ENABLE: bool = False
     FLEXMATCH_MOMENTUM: float = 0.7
     SOFT_PSEUDO_LABELS: bool = True
     FLEXMATCH_WARMUP_EPOCHS: int = 5
     FLEXMATCH_TAU_MIN: float = 0.85
-    FIXMATCH_USE_TOPK: bool = True
+    FIXMATCH_USE_TOPK: bool = False
     FIXMATCH_TOPK_POS: int = 8
     FIXMATCH_TOPK_NEG: int = 16
 

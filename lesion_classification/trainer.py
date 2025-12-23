@@ -82,10 +82,7 @@ def _class_ratio_thresholds(pseudo_labels: torch.Tensor, base_tau: float, min_ta
 
 
 def _asymmetric_thresholds(pseudo_labels: torch.Tensor, base_tau: float) -> torch.Tensor:
-    if settings.FIXMATCH_TAU <= 0:
-        scale = 1.0
-    else:
-        scale = base_tau / settings.FIXMATCH_TAU
+    scale = 1.0 if settings.FIXMATCH_TAU <= 0 else base_tau / settings.FIXMATCH_TAU
     return torch.where(
         pseudo_labels > 0.5,
         torch.tensor(settings.FIXMATCH_TAU_POS * scale, device=pseudo_labels.device),
@@ -194,9 +191,7 @@ def train_one_epoch_fixmatch(
             confidence = torch.maximum(weak_probs, 1 - weak_probs)
             pseudo_labels = (weak_probs >= 0.5).float()
             if settings.FIXMATCH_TAU_SCHEDULE:
-                base_tau = settings.FIXMATCH_TAU_START + (settings.FIXMATCH_TAU_END - settings.FIXMATCH_TAU_START) * min(
-                    epoch / max(1, settings.FIXMATCH_TAU_SCHEDULE_EPOCHS), 1.0
-                )
+                base_tau = settings.FIXMATCH_TAU_START + (settings.FIXMATCH_TAU_END - settings.FIXMATCH_TAU_START) * min(epoch / max(1, settings.FIXMATCH_TAU_SCHEDULE_EPOCHS), 1.0)
             else:
                 base_tau = settings.FIXMATCH_TAU
             use_flexmatch = settings.FLEXMATCH_ENABLE and epoch >= settings.FLEXMATCH_WARMUP_EPOCHS
@@ -217,10 +212,7 @@ def train_one_epoch_fixmatch(
 
             strong_logits = model(strong_imgs)
             unsup_loss = F.binary_cross_entropy_with_logits(strong_logits, pseudo_labels, reduction="none")
-            if settings.FIXMATCH_USE_TOPK:
-                mask = _topk_mask(confidence, pseudo_labels)
-            else:
-                mask = (confidence >= thresholds).float()
+            mask = _topk_mask(confidence, pseudo_labels) if settings.FIXMATCH_USE_TOPK else (confidence >= thresholds).float()
             if settings.SOFT_PSEUDO_LABELS:
                 denom = (1 - thresholds).clamp_min(1e-6)
                 weights = ((confidence - thresholds) / denom).clamp(0, 1)
