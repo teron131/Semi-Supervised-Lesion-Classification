@@ -16,9 +16,10 @@ class Settings(BaseSettings):
 
     # Training Hyperparameters
     BATCH_SIZE: int = 32
-    EPOCHS: int = 60  # Slightly more epochs for better SSL convergence
+    EPOCHS: int = 40  # Slightly more epochs for better SSL convergence
     LEARNING_RATE: float = 5e-5  # Lower LR for more stable training
     WEIGHT_DECAY: float = 3e-2  # Stronger regularization to combat overfitting
+    HEAD_LR_MULT: float = 3.0  # Faster adaptation for the classification head
 
     # Model Settings
     DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
@@ -27,7 +28,8 @@ class Settings(BaseSettings):
 
     # Loss Settings
     FOCAL_GAMMA: float = 2.0
-    FOCAL_ALPHA: float = 0.75  # Reduced slightly to reduce False Positives
+    FOCAL_ALPHA: float = 0.5
+    AUTO_FOCAL_ALPHA: bool = False
     SUPERVISED_LOSS: str = "focal"
     POS_WEIGHT: float = 2.0
     AUTO_POS_WEIGHT: bool = True
@@ -76,16 +78,18 @@ class Settings(BaseSettings):
 
     # Training control
     TRAIN_STEPS_PER_EPOCH: int = 64  # Define epoch length in batches
-    EARLY_STOP_PATIENCE: int = 20
+    EARLY_STOP_PATIENCE: int = 10
+    EARLY_STOP_MIN_DELTA: float = 1e-4
+    EARLY_STOP_METRIC: str | None = "val_auc"
     SAVE_BEST_CHECKPOINT: bool = True
-    BEST_METRIC: str = "val_ap"
+    BEST_METRIC: str = "val_auc"
     CHECKPOINT_DIR: Path = PROJECT_ROOT / "checkpoints"
     RESULTS_DIR: Path = PROJECT_ROOT / "results"
     WARMUP_EPOCHS: int = 2
     USE_AMP: bool = True
     MAX_GRAD_NORM: float = 1.0
     EMA_ENABLE: bool = True
-    EMA_DECAY: float = 0.99  # Faster adaptation
+    EMA_DECAY: float = 0.999
     FREEZE_BACKBONE_EPOCHS: int = 5
     LR_LAYER_DECAY: float = 0.8
     INIT_BIAS_FROM_PRIOR: bool = True

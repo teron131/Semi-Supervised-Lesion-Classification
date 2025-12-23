@@ -366,9 +366,10 @@ def train_one_epoch_fixmatch(
     avg_sup_loss = sup_loss_accum / num_batches
     avg_unsup_loss = unsup_loss_accum / num_batches
 
-    labeled_labels = np.array(labeled_labels_list)
-    labeled_preds = np.array(labeled_preds_list)
-    acc = accuracy_score(labeled_labels, np.round(labeled_preds))
+    labeled_labels = np.asarray(labeled_labels_list).reshape(-1)
+    labeled_preds = np.asarray(labeled_preds_list).reshape(-1)
+    labeled_hard_preds = (labeled_preds >= 0.5).astype(np.float32)
+    acc = accuracy_score(labeled_labels, labeled_hard_preds)
     has_multiple_classes = len(np.unique(labeled_labels)) > 1
     auc = roc_auc_score(labeled_labels, labeled_preds) if has_multiple_classes else 0.0
     return (
@@ -407,9 +408,9 @@ def validate(
         val_preds_list.extend(preds.cpu().numpy())
         val_labels_list.extend(targets.cpu().numpy())
 
-    val_labels = np.array(val_labels_list)
-    val_preds = np.array(val_preds_list)
-    val_hard_preds = np.round(val_preds)
+    val_labels = np.asarray(val_labels_list).reshape(-1)
+    val_preds = np.asarray(val_preds_list).reshape(-1)
+    val_hard_preds = (val_preds >= 0.5).astype(np.float32)
 
     has_multiple_classes = len(np.unique(val_labels)) > 1
     acc = accuracy_score(val_labels, val_hard_preds)
@@ -454,8 +455,20 @@ def run_training(
         "val_ap": [],
     }
 
+    def _select_metric(name: str, *, val_auc: float, val_ap: float) -> float:
+        if name == "val_auc":
+            return val_auc
+        if name == "val_ap":
+            return val_ap
+        raise ValueError(f"Unsupported metric '{name}'. Use 'val_auc' or 'val_ap'.")
+
+    best_metric_name = settings.BEST_METRIC
+    early_stop_metric_name = settings.EARLY_STOP_METRIC or best_metric_name
+
     best_metric = -1.0
     best_state = None
+    best_early_stop_metric = -1.0
+    best_early_stop_epoch = 0
     patience_left = settings.EARLY_STOP_PATIENCE
 
     for epoch in range(epochs):
@@ -508,12 +521,22 @@ def run_training(
             f"- Val Pos%: {val_pos_rate * 100:.1f}% - Val Sens: {val_sens * 100:.1f}% - Accepted Pos%: {accepted_ratio * 100:.1f}%"
         )
 
-        metric_value = val_auc if settings.BEST_METRIC == "val_auc" else val_ap
-        if metric_value <= best_metric:
+        early_stop_value = _select_metric(early_stop_metric_name, val_auc=val_auc, val_ap=val_ap)
+        if early_stop_value > best_early_stop_metric + settings.EARLY_STOP_MIN_DELTA:
+            best_early_stop_metric = early_stop_value
+            best_early_stop_epoch = epoch + 1
+            patience_left = settings.EARLY_STOP_PATIENCE
+        else:
             patience_left -= 1
             if patience_left <= 0:
-                print("Early stopping triggered.")
+                print(
+                    "Early stopping triggered "
+                    f"(best {early_stop_metric_name}={best_early_stop_metric:.4f} at epoch {best_early_stop_epoch})."
+                )
                 break
+
+        metric_value = _select_metric(best_metric_name, val_auc=val_auc, val_ap=val_ap)
+        if metric_value <= best_metric:
             continue
 
         best_metric = metric_value
@@ -526,7 +549,6 @@ def run_training(
                     best_state[name] = tensor.detach().cpu().clone()
         else:
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
-        patience_left = settings.EARLY_STOP_PATIENCE
         if settings.SAVE_BEST_CHECKPOINT:
             checkpoint_dir = Path(settings.CHECKPOINT_DIR)
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -537,7 +559,7 @@ def run_training(
                     "val_auc": val_auc,
                     "val_ap": val_ap,
                     "val_acc": val_acc,
-                    "best_metric": settings.BEST_METRIC,
+                    "best_metric": best_metric_name,
                     "ema_enabled": settings.EMA_ENABLE,
                 },
                 checkpoint_dir / "best.pt",

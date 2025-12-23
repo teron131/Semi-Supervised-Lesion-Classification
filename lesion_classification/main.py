@@ -37,7 +37,11 @@ def _build_supervised_loss(benign_count: int, malignant_count: int) -> nn.Module
             pos_weight_value = min(benign_count / malignant_count, settings.POS_WEIGHT_MAX)
         pos_weight = torch.tensor([pos_weight_value], dtype=torch.float32, device=settings.DEVICE)
         return nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    return BCEFocalLoss(gamma=settings.FOCAL_GAMMA, alpha=settings.FOCAL_ALPHA)
+    focal_alpha = settings.FOCAL_ALPHA
+    if settings.AUTO_FOCAL_ALPHA and benign_count > 0 and malignant_count > 0:
+        pos_weight_value = min(benign_count / malignant_count, settings.POS_WEIGHT_MAX)
+        focal_alpha = float(pos_weight_value / (1.0 + pos_weight_value))
+    return BCEFocalLoss(gamma=settings.FOCAL_GAMMA, alpha=focal_alpha)
 
 
 def _build_optimizer(model: ClassifierModel) -> AdamW:
@@ -47,27 +51,53 @@ def _build_optimizer(model: ClassifierModel) -> AdamW:
     param_groups = []
     added: set[int] = set()
 
+    def split_decay(params: list[nn.Parameter], names: list[str]) -> tuple[list[nn.Parameter], list[nn.Parameter]]:
+        decay_params: list[nn.Parameter] = []
+        no_decay_params: list[nn.Parameter] = []
+        for param, name in zip(params, names, strict=True):
+            if not param.requires_grad:
+                continue
+            if param.ndim <= 1 or name.endswith("bias"):
+                no_decay_params.append(param)
+            else:
+                decay_params.append(param)
+        return decay_params, no_decay_params
+
+    def add_group(params: list[nn.Parameter], lr: float, names: list[str]) -> None:
+        decay_params, no_decay_params = split_decay(params, names)
+        if decay_params:
+            param_groups.append({"params": decay_params, "lr": lr, "weight_decay": settings.WEIGHT_DECAY})
+            added.update(id(p) for p in decay_params)
+        if no_decay_params:
+            param_groups.append({"params": no_decay_params, "lr": lr, "weight_decay": 0.0})
+            added.update(id(p) for p in no_decay_params)
+
     backbone = model.encoder[0] if isinstance(model.encoder, nn.Sequential) else model.encoder
     if hasattr(backbone, "features"):
         stages = list(backbone.features)
         n_stages = max(len(stages), 1)
         for idx, stage in enumerate(stages):
             lr = base_lr * (decay ** (n_stages - 1 - idx))
-            params = [p for p in stage.parameters() if p.requires_grad]
-            if params:
-                param_groups.append({"params": params, "lr": lr})
-                added.update(id(p) for p in params)
+            stage_named_params = list(stage.named_parameters())
+            if stage_named_params:
+                stage_params = [param for _, param in stage_named_params]
+                stage_names = [name for name, _ in stage_named_params]
+                add_group(stage_params, lr, stage_names)
 
-    head_params = [p for p in model.classifier.parameters() if p.requires_grad]
-    if head_params:
-        param_groups.append({"params": head_params, "lr": base_lr})
-        added.update(id(p) for p in head_params)
+    head_lr = base_lr * settings.HEAD_LR_MULT
+    head_named_params = list(model.classifier.named_parameters())
+    if head_named_params:
+        head_params = [param for _, param in head_named_params]
+        head_names = [name for name, _ in head_named_params]
+        add_group(head_params, head_lr, head_names)
 
-    remaining = [p for p in model.parameters() if id(p) not in added and p.requires_grad]
-    if remaining:
-        param_groups.append({"params": remaining, "lr": base_lr})
+    remaining_named = [(name, param) for name, param in model.named_parameters() if id(param) not in added]
+    if remaining_named:
+        remaining_params = [param for _, param in remaining_named]
+        remaining_names = [name for name, _ in remaining_named]
+        add_group(remaining_params, base_lr, remaining_names)
 
-    return AdamW(param_groups, lr=base_lr, weight_decay=settings.WEIGHT_DECAY)
+    return AdamW(param_groups, lr=base_lr, weight_decay=0.0)
 
 
 def _build_scheduler(optimizer: AdamW) -> LambdaLR:
