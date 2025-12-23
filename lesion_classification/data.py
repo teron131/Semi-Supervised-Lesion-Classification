@@ -327,7 +327,8 @@ def _build_weighted_sampler(train_dataset: Dataset, benign_count: int, malignant
             weight = malignant_weight if label == LABEL_MALIGNANT else benign_weight
             label_weights.append(weight)
 
-    return WeightedRandomSampler(label_weights, num_samples=len(label_weights), replacement=True)
+    num_samples = settings.TRAIN_STEPS_PER_EPOCH * settings.BATCH_SIZE
+    return WeightedRandomSampler(label_weights, num_samples=num_samples, replacement=True)
 
 
 def get_dataloaders(batch_size: int = 32):
@@ -364,7 +365,7 @@ def get_dataloaders(batch_size: int = 32):
 
     unlabeled_loader = DataLoader(
         unlabeled_dataset,
-        batch_size=batch_size,
+        batch_size=batch_size * settings.FIXMATCH_MU,
         shuffle=True,
         num_workers=settings.NUM_WORKERS,
         pin_memory=settings.PIN_MEMORY,

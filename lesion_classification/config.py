@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     FIXMATCH_USE_TOPK: bool = False
     FIXMATCH_TOPK_POS: int = 8
     FIXMATCH_TOPK_NEG: int = 16
+    FIXMATCH_MU: int = 3  # Ratio of unlabeled to labeled batch size
 
     # MixUp augmentation (creates synthetic samples)
     MIXUP_ENABLE: bool = True
@@ -74,6 +75,7 @@ class Settings(BaseSettings):
     MIXUP_PROB: float = 0.5
 
     # Training control
+    TRAIN_STEPS_PER_EPOCH: int = 64  # Define epoch length in batches
     EARLY_STOP_PATIENCE: int = 20
     SAVE_BEST_CHECKPOINT: bool = True
     BEST_METRIC: str = "val_ap"
