@@ -82,7 +82,7 @@ def main():
     # 4. Model
     backbone, feature_dim = get_convnext_tiny(pre_trained=settings.PRE_TRAINED)
     model = ClassifierModel(backbone, feature_dim, settings.NUM_CLASSES)
-    if malignant_count > 0 and benign_count > 0:
+    if settings.INIT_BIAS_FROM_PRIOR and malignant_count > 0 and benign_count > 0:
         prior = malignant_count / (benign_count + malignant_count)
         bias_value = math.log(prior / (1 - prior))
         with torch.no_grad():

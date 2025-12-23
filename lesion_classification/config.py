@@ -81,6 +81,7 @@ class Settings(BaseSettings):
     EMA_DECAY: float = 0.999
     FREEZE_BACKBONE_EPOCHS: int = 2
     LR_LAYER_DECAY: float = 0.8
+    INIT_BIAS_FROM_PRIOR: bool = False
 
     # Derived stats (populated at runtime)
     TRAIN_POS_RATIO: float | None = None
