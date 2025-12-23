@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     SUPERVISED_LOSS: str = "bce"  # "focal" or "bce"
     POS_WEIGHT: float = 3.0
     AUTO_POS_WEIGHT: bool = True
-    POS_WEIGHT_MAX: float = 3.0
+    POS_WEIGHT_MAX: float = 2.0
 
     # Data settings
     TRAIN_SPLIT_SIZE: int = 270
@@ -45,9 +45,9 @@ class Settings(BaseSettings):
 
     # Semi-supervised settings (FixMatch)
     FIXMATCH_TAU: float = 0.95
-    FIXMATCH_TAU_POS: float = 0.95
+    FIXMATCH_TAU_POS: float = 0.9
     FIXMATCH_TAU_NEG: float = 0.95
-    FIXMATCH_USE_ASYMMETRIC_TAU: bool = False
+    FIXMATCH_USE_ASYMMETRIC_TAU: bool = True
     FIXMATCH_TAU_SCHEDULE: bool = False
     FIXMATCH_TAU_START: float = 0.95
     FIXMATCH_TAU_END: float = 0.85
@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     SOFT_PSEUDO_LABELS: bool = True
     FLEXMATCH_WARMUP_EPOCHS: int = 5
     FLEXMATCH_TAU_MIN: float = 0.85
-    FIXMATCH_USE_TOPK: bool = False
+    FIXMATCH_USE_TOPK: bool = True
     FIXMATCH_TOPK_POS: int = 8
     FIXMATCH_TOPK_NEG: int = 16
 
