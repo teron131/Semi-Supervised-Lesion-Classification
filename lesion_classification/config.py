@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     FIXMATCH_TAU_POS: float = 0.8
     FIXMATCH_TAU_NEG: float = 0.9
     FIXMATCH_USE_ASYMMETRIC_TAU: bool = True
+    FIXMATCH_TAU_SCHEDULE: bool = True
+    FIXMATCH_TAU_START: float = 0.95
+    FIXMATCH_TAU_END: float = 0.85
+    FIXMATCH_TAU_SCHEDULE_EPOCHS: int = 8
     FIXMATCH_LAMBDA_U: float = 0.5
     FIXMATCH_RAMPUP_EPOCHS: int = 10
     FIXMATCH_MIN_TAU: float = 0.4
@@ -75,6 +79,8 @@ class Settings(BaseSettings):
     MAX_GRAD_NORM: float = 1.0
     EMA_ENABLE: bool = True
     EMA_DECAY: float = 0.999
+    FREEZE_BACKBONE_EPOCHS: int = 2
+    LR_LAYER_DECAY: float = 0.8
 
     # Derived stats (populated at runtime)
     TRAIN_POS_RATIO: float | None = None

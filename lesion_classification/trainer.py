@@ -81,11 +81,15 @@ def _class_ratio_thresholds(pseudo_labels: torch.Tensor, base_tau: float, min_ta
     )
 
 
-def _asymmetric_thresholds(pseudo_labels: torch.Tensor) -> torch.Tensor:
+def _asymmetric_thresholds(pseudo_labels: torch.Tensor, base_tau: float) -> torch.Tensor:
+    if settings.FIXMATCH_TAU <= 0:
+        scale = 1.0
+    else:
+        scale = base_tau / settings.FIXMATCH_TAU
     return torch.where(
         pseudo_labels > 0.5,
-        torch.tensor(settings.FIXMATCH_TAU_POS, device=pseudo_labels.device),
-        torch.tensor(settings.FIXMATCH_TAU_NEG, device=pseudo_labels.device),
+        torch.tensor(settings.FIXMATCH_TAU_POS * scale, device=pseudo_labels.device),
+        torch.tensor(settings.FIXMATCH_TAU_NEG * scale, device=pseudo_labels.device),
     )
 
 
@@ -109,16 +113,17 @@ def _flexmatch_thresholds(
     pseudo_labels: torch.Tensor,
     ema_select: torch.Tensor,
     ema_total: torch.Tensor,
+    base_tau: float,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     batch_pos = (pseudo_labels > 0.5).float()
     batch_neg = 1.0 - batch_pos
     ema_total = settings.FLEXMATCH_MOMENTUM * ema_total + (1 - settings.FLEXMATCH_MOMENTUM) * torch.stack([batch_neg.mean(), batch_pos.mean()])
-    select_mask = (confidence >= settings.FIXMATCH_TAU).float()
+    select_mask = (confidence >= base_tau).float()
     ema_select = settings.FLEXMATCH_MOMENTUM * ema_select + (1 - settings.FLEXMATCH_MOMENTUM) * torch.stack([(select_mask * batch_neg).mean(), (select_mask * batch_pos).mean()])
     class_ratio = ema_select / ema_total
     max_ratio = class_ratio.max().clamp(min=1e-6)
-    tau_neg = max(settings.FLEXMATCH_TAU_MIN, float(settings.FIXMATCH_TAU * (class_ratio[0] / max_ratio)))
-    tau_pos = max(settings.FLEXMATCH_TAU_MIN, float(settings.FIXMATCH_TAU * (class_ratio[1] / max_ratio)))
+    tau_neg = max(settings.FLEXMATCH_TAU_MIN, float(base_tau * (class_ratio[0] / max_ratio)))
+    tau_pos = max(settings.FLEXMATCH_TAU_MIN, float(base_tau * (class_ratio[1] / max_ratio)))
     thresholds = torch.where(
         pseudo_labels > 0.5,
         torch.tensor(tau_pos, device=confidence.device),
@@ -188,21 +193,27 @@ def train_one_epoch_fixmatch(
 
             confidence = torch.maximum(weak_probs, 1 - weak_probs)
             pseudo_labels = (weak_probs >= 0.5).float()
+            if settings.FIXMATCH_TAU_SCHEDULE:
+                base_tau = settings.FIXMATCH_TAU_START + (settings.FIXMATCH_TAU_END - settings.FIXMATCH_TAU_START) * min(
+                    epoch / max(1, settings.FIXMATCH_TAU_SCHEDULE_EPOCHS), 1.0
+                )
+            else:
+                base_tau = settings.FIXMATCH_TAU
             use_flexmatch = settings.FLEXMATCH_ENABLE and epoch >= settings.FLEXMATCH_WARMUP_EPOCHS
             if use_flexmatch:
-                thresholds, ema_select, ema_total = _flexmatch_thresholds(confidence, pseudo_labels, ema_select, ema_total)
+                thresholds, ema_select, ema_total = _flexmatch_thresholds(confidence, pseudo_labels, ema_select, ema_total, base_tau)
             elif settings.FIXMATCH_USE_ASYMMETRIC_TAU:
-                thresholds = _asymmetric_thresholds(pseudo_labels)
+                thresholds = _asymmetric_thresholds(pseudo_labels, base_tau)
             elif settings.FIXMATCH_USE_CLASS_THRESHOLDS and settings.TRAIN_POS_RATIO is not None and settings.TRAIN_NEG_RATIO is not None:
                 thresholds = _class_ratio_thresholds(
                     pseudo_labels,
-                    settings.FIXMATCH_TAU,
+                    base_tau,
                     settings.FIXMATCH_MIN_TAU,
                     settings.TRAIN_POS_RATIO,
                     settings.TRAIN_NEG_RATIO,
                 )
             else:
-                thresholds = torch.full_like(confidence, settings.FIXMATCH_TAU)
+                thresholds = torch.full_like(confidence, base_tau)
 
             strong_logits = model(strong_imgs)
             unsup_loss = F.binary_cross_entropy_with_logits(strong_logits, pseudo_labels, reduction="none")
@@ -325,6 +336,14 @@ def run_training(
     patience_left = settings.EARLY_STOP_PATIENCE
 
     for epoch in range(epochs):
+        if epoch < settings.FREEZE_BACKBONE_EPOCHS:
+            for param in model.encoder.parameters():
+                param.requires_grad = False
+            for param in model.classifier.parameters():
+                param.requires_grad = True
+        elif epoch == settings.FREEZE_BACKBONE_EPOCHS:
+            for param in model.encoder.parameters():
+                param.requires_grad = True
         avg_loss, sup_loss, unsup_loss, train_acc, train_auc, accepted_total, accepted_pos, accepted_neg = train_one_epoch_fixmatch(
             model, train_loader, unlabeled_loader, optimizer, supervised_criterion, device, epoch, scaler, ema
         )

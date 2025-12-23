@@ -38,6 +38,35 @@ def _build_supervised_loss(benign_count: int, malignant_count: int) -> nn.Module
     return BCEFocalLoss(gamma=settings.FOCAL_GAMMA, alpha=settings.FOCAL_ALPHA)
 
 
+def _build_optimizer(model: ClassifierModel) -> AdamW:
+    base_lr = settings.LEARNING_RATE
+    decay = settings.LR_LAYER_DECAY
+    param_groups = []
+    added: set[int] = set()
+
+    backbone = model.encoder[0] if isinstance(model.encoder, nn.Sequential) else model.encoder
+    if hasattr(backbone, "features"):
+        stages = list(backbone.features)
+        n_stages = max(len(stages), 1)
+        for idx, stage in enumerate(stages):
+            lr = base_lr * (decay ** (n_stages - 1 - idx))
+            params = [p for p in stage.parameters() if p.requires_grad]
+            if params:
+                param_groups.append({"params": params, "lr": lr})
+                added.update(id(p) for p in params)
+
+    head_params = [p for p in model.classifier.parameters() if p.requires_grad]
+    if head_params:
+        param_groups.append({"params": head_params, "lr": base_lr})
+        added.update(id(p) for p in head_params)
+
+    remaining = [p for p in model.parameters() if id(p) not in added and p.requires_grad]
+    if remaining:
+        param_groups.append({"params": remaining, "lr": base_lr})
+
+    return AdamW(param_groups, lr=base_lr, weight_decay=settings.WEIGHT_DECAY)
+
+
 def main():
     # 1. Setup
     set_seed(42)
@@ -55,7 +84,7 @@ def main():
     model = ClassifierModel(backbone, feature_dim, settings.NUM_CLASSES)
 
     # 5. Optimizer, Loss, Scheduler
-    optimizer = AdamW(model.parameters(), lr=settings.LEARNING_RATE, weight_decay=settings.WEIGHT_DECAY)
+    optimizer = _build_optimizer(model)
     supervised_criterion = _build_supervised_loss(benign_count, malignant_count)
 
     def lr_lambda(epoch: int) -> float:
