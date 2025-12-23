@@ -4,14 +4,30 @@
 
 ## Modernized Implementation
 - Backbone: ConvNeXt-Tiny (ImageNet pretrained)
-- SSL: FixMatch (weak/strong views with RandAugment/TrivialAugment fallback + Cutout)
-- Loss: BCEWithLogitsLoss with pos_weight (optional focal)
-- Optimizer: AdamW with cosine decay and warmup
-- Evaluation: Acc, AUC, AP, with EMA weights for validation
-- Outputs: `results/history.csv` and `results/training_curves.png`
+- SSL: FixMatch for binary classification (weak/strong aug views; pseudo-labels from weak view; supervised + unsupervised losses)
+  - Pseudo-label gating: confidence thresholding with scheduled base `tau` and optional asymmetric thresholds (`tau_pos`/`tau_neg`)
+  - Optional distribution alignment (EMA-matched prior) + probability sharpening
+  - Optional FlexMatch-style adaptive thresholds; optional soft pseudo-label weighting
+  - Unlabeled ratio `mu` and ramped unsupervised weight `lambda_u`
+- Loss: `BCEWithLogitsLoss(pos_weight=...)` or focal loss on logits (`gamma`, `alpha`); optional bias init from class prior
+- Optimization: AdamW with param-grouped weight decay (no decay for bias/norm), layer-wise LR decay, and head LR multiplier
+  - LR schedule: warmup + cosine decay; AMP + grad clipping
+- Evaluation: Acc / ROC-AUC / AP from sigmoid probabilities; EMA weights applied for validation; early stopping + checkpoint selection can target AUC or AP
 
 ![Training Curves](results/training_curves.png)
 
+## Comparison (Old vs Modernized)
+
+| Aspect | Original Implementation | Modernized Implementation |
+|---|---|---|
+| Backbone | ResNet (baseline in notebook) | ConvNeXt-Tiny (ImageNet pretrained) |
+| SSL method | Mean Teacher (consistency with EMA teacher) | FixMatch (weak/strong augmentations + thresholded pseudo-labels) |
+| Pseudo-label control | N/A | `tau` schedule; optional asymmetric thresholds; optional FlexMatch adaptive thresholds; optional distribution alignment + sharpening |
+| Imbalance handling | Upsampling/augmentation in notebook | Weighted sampling on labeled loader; loss reweighting via `pos_weight` or focal `alpha` |
+| Optimization | Standard optimizer setup | AdamW with bias/norm no-decay, layer-wise LR decay, head LR multiplier, warmup + cosine schedule |
+| Stabilization | EMA teacher model | EMA weights for evaluation; AMP + grad clipping |
+| Metrics | Accuracy / AUC (reported) | Accuracy / ROC-AUC / AP (logged each epoch) |
+| Artifacts | Notebook-only logs/plots | `results/history.csv`, `results/training_curves.png`, `checkpoints/best.pt` |
 
 
 ## Original Implementation
