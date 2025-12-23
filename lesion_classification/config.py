@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     VAL_DIR: Path = DATA_DIR / "val"
 
     # Training Hyperparameters
-    BATCH_SIZE: int = 32
+    BATCH_SIZE: int = 64
     EPOCHS: int = 40  # Slightly more epochs for better SSL convergence
     LEARNING_RATE: float = 5e-5  # Lower LR for more stable training
     WEIGHT_DECAY: float = 3e-2  # Stronger regularization to combat overfitting
@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     SPLIT_SEED: int = 42
     IMAGE_RESIZE: int = 256
     IMAGE_SIZE: int = 224
-    NUM_WORKERS: int = 2
+    NUM_WORKERS: int = 8
     PIN_MEMORY: bool = torch.cuda.is_available()
     USE_WEIGHTED_SAMPLER: bool = True
 
@@ -78,7 +78,7 @@ class Settings(BaseSettings):
 
     # Training control
     TRAIN_STEPS_PER_EPOCH: int = 64  # Define epoch length in batches
-    EARLY_STOP_PATIENCE: int = 10
+    EARLY_STOP_PATIENCE: int = 5
     EARLY_STOP_MIN_DELTA: float = 1e-4
     EARLY_STOP_METRIC: str | None = "val_auc"
     SAVE_BEST_CHECKPOINT: bool = True
