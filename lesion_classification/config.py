@@ -27,8 +27,8 @@ class Settings(BaseSettings):
 
     # Loss Settings
     FOCAL_GAMMA: float = 2.0
-    FOCAL_ALPHA: float = 0.6
-    SUPERVISED_LOSS: str = "focal"  # Focal loss for hard example mining
+    FOCAL_ALPHA: float = 0.85  # For 5.4:1 ratio: majority_count/total = 228/270 ≈ 0.844
+    SUPERVISED_LOSS: str = "focal"  # Try focal loss with corrected alpha
     POS_WEIGHT: float = 2.5
     AUTO_POS_WEIGHT: bool = True  # Auto-compute based on class ratio
     POS_WEIGHT_MAX: float = 4.0  # Allow higher weight for minority class
