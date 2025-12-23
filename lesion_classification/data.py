@@ -26,6 +26,7 @@ class DataTransforms:
     pca: Augm.Compose
     weak: Augm.Compose
     strong: Augm.Compose
+    train_labeled: Augm.Compose
 
 
 def _read_rgb(image_filepath: str | Path) -> np.ndarray:
