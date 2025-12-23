@@ -1,0 +1,7 @@
+REMOTE_IP="..."
+
+REMOTE_PORT="..."
+
+ssh -o StrictHostKeyChecking=no root@"$REMOTE_IP" -p "$REMOTE_PORT" "cd Semi-Supervised-Lesion-Classification && rm -rf results/ checkpoints/ && git pull && echo '=== Pull complete ==='"
+ssh -o StrictHostKeyChecking=no root@"$REMOTE_IP" -p "$REMOTE_PORT" "cd Semi-Supervised-Lesion-Classification && uv run python -m lesion_classification.main"
+mkdir -p results && scp -P "$REMOTE_PORT" -o StrictHostKeyChecking=no root@"$REMOTE_IP":/root/Semi-Supervised-Lesion-Classification/results/history.csv ./results/ && scp -P "$REMOTE_PORT" -o StrictHostKeyChecking=no root@"$REMOTE_IP":/root/Semi-Supervised-Lesion-Classification/results/training_curves.png ./results/ && echo "=== Results downloaded ===" && ls -lh results/
