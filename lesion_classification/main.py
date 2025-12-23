@@ -8,7 +8,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from .config import settings
 from .data import get_class_counts, get_dataloaders, prepare_data
 from .losses import BCEFocalLoss
-from .models import ClassifierModel, get_convnext_tiny
+from .models import ClassifierModel, get_convnext_tiny, get_resnet50
 from .trainer import run_training
 from .utils import plot_history, save_history, set_seed
 
@@ -80,7 +80,10 @@ def main():
     train_loader, unlabeled_loader, val_loader = get_dataloaders(settings.BATCH_SIZE)
 
     # 4. Model
-    backbone, feature_dim = get_convnext_tiny(pre_trained=settings.PRE_TRAINED)
+    if settings.BACKBONE == "resnet50":
+        backbone, feature_dim = get_resnet50(pre_trained=settings.PRE_TRAINED)
+    else:
+        backbone, feature_dim = get_convnext_tiny(pre_trained=settings.PRE_TRAINED)
     model = ClassifierModel(backbone, feature_dim, settings.NUM_CLASSES)
     if settings.INIT_BIAS_FROM_PRIOR and malignant_count > 0 and benign_count > 0:
         prior = malignant_count / (benign_count + malignant_count)

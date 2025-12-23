@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
     PRE_TRAINED: bool = True
     NUM_CLASSES: int = 1
+    BACKBONE: str = "resnet50"  # "resnet50" or "convnext_tiny"
 
     # Loss Settings
     FOCAL_GAMMA: float = 2.0
