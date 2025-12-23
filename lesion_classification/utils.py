@@ -39,8 +39,7 @@ def plot_history(history: dict[str, list[float]], output_dir: Path | None = None
     plt.subplot(1, 3, 1)
     plt.plot(epochs, history["loss_total"], label="Total")
     plt.plot(epochs, history["loss_sup"], label="Supervised")
-    unsup_key = "loss_unsup" if "loss_unsup" in history else "loss_con"
-    plt.plot(epochs, history[unsup_key], label="Unsupervised")
+    plt.plot(epochs, history["loss_unsup"], label="Unsupervised")
     plt.title("Loss")
     plt.xlabel("Epoch")
     plt.legend()

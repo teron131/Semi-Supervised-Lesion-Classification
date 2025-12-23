@@ -180,12 +180,19 @@ def train_one_epoch_fixmatch(
         ema_select = torch.tensor([0.0, 0.0], device=device)
         ema_total = torch.tensor([1e-6, 1e-6], device=device)
 
-    labeled_iter = itertools.cycle(labeled_loader)
+    unlabeled_iter = itertools.cycle(unlabeled_loader)
     accepted_pos = 0.0
     accepted_neg = 0.0
     accepted_total = 0.0
-    for weak_imgs, strong_imgs in unlabeled_loader:
-        labeled_imgs, labeled_targets = next(labeled_iter)
+
+    # We use labeled_loader to drive the loop to ensure we see all labeled data
+    for labeled_imgs, labeled_targets in labeled_loader:
+        try:
+            weak_imgs, strong_imgs = next(unlabeled_iter)
+        except StopIteration:
+            unlabeled_iter = itertools.cycle(unlabeled_loader)
+            weak_imgs, strong_imgs = next(unlabeled_iter)
+
         num_batches += 1
 
         labeled_imgs = labeled_imgs.to(device)
@@ -249,14 +256,14 @@ def train_one_epoch_fixmatch(
                 thresholds = torch.full_like(confidence, base_tau)
 
             strong_logits = model(strong_imgs)
-            unsup_loss = F.binary_cross_entropy_with_logits(strong_logits, pseudo_labels, reduction="none")
+            unsup_loss_all = F.binary_cross_entropy_with_logits(strong_logits, pseudo_labels, reduction="none")
             mask = _topk_mask(confidence, pseudo_labels) if settings.FIXMATCH_USE_TOPK else (confidence >= thresholds).float()
             if settings.SOFT_PSEUDO_LABELS:
                 denom = (1 - thresholds).clamp_min(1e-6)
                 weights = ((confidence - thresholds) / denom).clamp(0, 1)
-                unsup_loss = (unsup_loss * weights).sum() / (weights.sum() + 1e-8)
+                unsup_loss = (unsup_loss_all * weights).sum() / (weights.sum() + 1e-8)
             else:
-                unsup_loss = (unsup_loss * mask).sum() / (mask.sum() + 1e-8)
+                unsup_loss = (unsup_loss_all * mask).sum() / (mask.sum() + 1e-8)
             accepted_total += float(mask.sum().item())
             accepted_pos += float((mask * pseudo_labels).sum().item())
             accepted_neg += float((mask * (1 - pseudo_labels)).sum().item())

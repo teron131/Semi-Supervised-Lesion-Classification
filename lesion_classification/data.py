@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from pathlib import Path
-import random
 import shutil
 
 import albumentations as Augm
@@ -10,7 +9,7 @@ import cv2
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import ConcatDataset, DataLoader, Dataset, WeightedRandomSampler
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
 from .config import ensure_dirs, settings
 
@@ -211,6 +210,7 @@ def get_transforms() -> DataTransforms:
         [
             Augm.RandomResizedCrop(size=(settings.IMAGE_SIZE, settings.IMAGE_SIZE), scale=(0.8, 1.0)),
             Augm.HorizontalFlip(p=0.5),
+            Augm.VerticalFlip(p=0.5),
             Augm.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
             ToTensorV2(),
         ]
@@ -246,7 +246,7 @@ def get_transforms() -> DataTransforms:
                 ],
                 p=0.3,
             ),
-            Augm.CoarseDropout(fill_value=0, max_holes=8, max_height=32, max_width=32, p=0.5),
+            Augm.CoarseDropout(max_holes=8, max_height=32, max_width=32, p=0.5),
             Augm.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.3),
             Augm.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
             ToTensorV2(),
@@ -260,17 +260,24 @@ def get_transforms() -> DataTransforms:
         pca=pca_transform,
         weak=weak_transform,
         strong=strong_transform,
+        train_labeled=weak_transform,  # FixMatch uses weak for labeled
     )
 
 
-def _build_weighted_sampler(train_dataset: ConcatDataset, benign_count: int, malignant_count: int) -> WeightedRandomSampler:
+def _build_weighted_sampler(train_dataset: Dataset, benign_count: int, malignant_count: int) -> WeightedRandomSampler:
     label_weights = []
     benign_weight = 1.0 / max(benign_count, 1)
     malignant_weight = 1.0 / max(malignant_count, 1)
-    for dataset in train_dataset.datasets:
-        if isinstance(dataset, AugmentedDataset):
-            for filepath in dataset.images_filepaths:
-                label_weights.append(malignant_weight if _label_from_path(filepath) == 1.0 else benign_weight)
+
+    # Iterate through the dataset to assign weights based on labels
+    if isinstance(train_dataset, AugmentedDataset):
+        for filepath in train_dataset.images_filepaths:
+            label_weights.append(malignant_weight if _label_from_path(filepath) == 1.0 else benign_weight)
+    else:
+        # Fallback for generic dataset
+        for _, label in train_dataset:
+            label_weights.append(malignant_weight if label == 1.0 else benign_weight)
+
     return WeightedRandomSampler(label_weights, num_samples=len(label_weights), replacement=True)
 
 
@@ -282,32 +289,19 @@ def get_dataloaders(batch_size: int = 32):
     benign_dir = settings.TRAIN_DIR / "benign"
     malignant_dir = settings.TRAIN_DIR / "malignant"
 
-    # Get filepaths for upsampling minority class (malignant)
     benign_filepaths = _list_images(benign_dir)
     malignant_filepaths = _list_images(malignant_dir)
 
-    # Upsampling (Malignant x2 as in notebook)
-    aug_train_filepaths = [*benign_filepaths, *malignant_filepaths]
-    if not settings.USE_WEIGHTED_SAMPLER:
-        aug_train_filepaths = [*aug_train_filepaths, *malignant_filepaths]
-    random.seed(settings.SPLIT_SEED)
-    random.shuffle(aug_train_filepaths)
-
-    # Create augmented datasets
-    geo_ds = AugmentedDataset(aug_train_filepaths, transform=transforms.geo)
-    col_ds = AugmentedDataset(aug_train_filepaths, transform=transforms.color)
-    pca_ds = AugmentedDataset(aug_train_filepaths, transform=transforms.pca)
-    aug_train_dataset = ConcatDataset([geo_ds, col_ds, pca_ds])
-
-    standard_train_filepaths = [*benign_filepaths, *malignant_filepaths]
-    standard_train_dataset = AugmentedDataset(standard_train_filepaths, transform=transforms.normalize)
-    train_dataset = ConcatDataset([standard_train_dataset, aug_train_dataset])
+    # Combined filepaths for labeled training
+    train_filepaths = [*benign_filepaths, *malignant_filepaths]
+    train_dataset = AugmentedDataset(train_filepaths, transform=transforms.train_labeled)
 
     unlabeled_dataset = UnlabeledDataset(settings.UNLABELED_DIR, weak_transform=transforms.weak, strong_transform=transforms.strong)
     val_filepaths = _list_images(settings.VAL_DIR / "benign") + _list_images(settings.VAL_DIR / "malignant")
     val_dataset = AugmentedDataset(val_filepaths, transform=transforms.normalize)
 
     generator = torch.Generator().manual_seed(settings.SPLIT_SEED)
+
     sampler = None
     if settings.USE_WEIGHTED_SAMPLER:
         sampler = _build_weighted_sampler(train_dataset, len(benign_filepaths), len(malignant_filepaths))
@@ -321,6 +315,7 @@ def get_dataloaders(batch_size: int = 32):
         pin_memory=settings.PIN_MEMORY,
         generator=generator,
     )
+
     unlabeled_loader = DataLoader(
         unlabeled_dataset,
         batch_size=batch_size,
